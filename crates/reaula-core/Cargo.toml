@@ -1,0 +1,16 @@
+[package]
+name = "reaula-core"
+version = "0.1.0"
+edition = "2024"
+description = "Core HID driver, protocol codec, keymap, and secure IPC for the Aula WIN 60 HE"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+hidapi = "2.6"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+

@@ -1,0 +1,6 @@
+# Grant userspace HID access to Aula WIN 60 HE (2E3C:C365) vendor interface.
+# Install:
+#   sudo cp udev/99-aula-win60he.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=hidraw
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="2e3c", ATTRS{idProduct}=="c365", MODE="0660", TAG+="uaccess"
+

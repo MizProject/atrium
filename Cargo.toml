@@ -1,0 +1,10 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/reaula-core",
+    "crates/reaula-daemon",
+    "crates/reaula-cli",
+    "crates/reaula-tui",
+    "crates/reaula-gui",
+]
+default-members = ["crates/reaula-cli"]
