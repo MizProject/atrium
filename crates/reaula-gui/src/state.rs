@@ -600,6 +600,9 @@ pub struct ConnectedState {
     pub shortcut_recording: bool,
     pub record_first_key: Option<u8>,
     pub captured_gesture_banner: Option<String>,
+    pub daemon_pulses: BTreeMap<u8, Instant>,
+    pub daemon_active_snapshot: BTreeSet<u8>,
+    pub daemon_pulsing_snapshot: BTreeSet<u8>,
 
     pub diag_report: Option<DiagnosticReport>,
     pub echo_latencies_ms: Vec<f64>,
@@ -674,6 +677,8 @@ impl ConnectedState {
             uinput_error,
             evdev_grab_active,
             shortcut_persist_path,
+            daemon_active_snapshot,
+            daemon_pulsing_snapshot,
         ) = match client.get_shortcuts() {
             Ok(snap) => (
                 snap.rules,
@@ -683,8 +688,20 @@ impl ConnectedState {
                 snap.uinput_error,
                 snap.evdev_grab_active,
                 snap.persist_path,
+                snap.active_indicator_keys.into_iter().collect(),
+                snap.pulsing_indicator_keys.into_iter().collect(),
             ),
-            Err(_) => (Vec::new(), true, Vec::new(), false, None, false, None),
+            Err(_) => (
+                Vec::new(),
+                true,
+                Vec::new(),
+                false,
+                None,
+                false,
+                None,
+                BTreeSet::new(),
+                BTreeSet::new(),
+            ),
         };
         let keyboard_fn_map: BTreeMap<u8, u8> = client
             .get_fn_overrides()
@@ -788,6 +805,9 @@ impl ConnectedState {
             shortcut_recording: false,
             record_first_key: None,
             captured_gesture_banner: None,
+            daemon_pulses: BTreeMap::new(),
+            daemon_active_snapshot,
+            daemon_pulsing_snapshot,
             diag_report: None,
             echo_latencies_ms: Vec::new(),
             feedback_log: VecDeque::new(),
@@ -1025,19 +1045,42 @@ impl ConnectedState {
                 entry.released_zero = true;
             }
 
+            if self.shortcut_watcher_active {
+                for rule in &self.shortcut_rules {
+                    if !rule.enabled || rule.trigger_key != sample.index {
+                        continue;
+                    }
+                    let mod_ok = rule
+                        .modifier_key
+                        .is_none_or(|m| self.live_depths.get(&m).is_some_and(|(d, _)| *d >= 0.35));
+                    if mod_ok && mm >= rule.trigger_depth_mm {
+                        self.daemon_pulses.insert(rule.trigger_key, now);
+                        if let Some(m) = rule.modifier_key {
+                            self.daemon_pulses.entry(m).or_insert(now);
+                        }
+                    }
+                }
+            }
+
             if self.shortcut_recording {
                 self.process_gesture_capture(sample.index, mm);
             }
             changed = true;
         }
-        // Expire old typing impulses (> 1.3s) and stale held readings (> 1.2s).
+        // Expire old typing impulses (> 3.1s for Fireworks tail), daemon pulses (> 650ms), and stale holds.
         let before_imp = self.recent_impulses.len();
         self.recent_impulses
-            .retain(|imp| now.duration_since(imp.trigger_at) < Duration::from_millis(1300));
+            .retain(|imp| now.duration_since(imp.trigger_at) < Duration::from_millis(3100));
+        let before_pulse = self.daemon_pulses.len();
+        self.daemon_pulses
+            .retain(|_, ts| now.duration_since(*ts) < Duration::from_millis(650));
         let before = self.live_depths.len();
         self.live_depths
             .retain(|_, (_, ts)| now.duration_since(*ts) < Duration::from_millis(1200));
-        changed || self.live_depths.len() != before || self.recent_impulses.len() != before_imp
+        changed
+            || self.live_depths.len() != before
+            || self.recent_impulses.len() != before_imp
+            || self.daemon_pulses.len() != before_pulse
     }
 
     pub fn active_impulses(&self) -> Vec<KeyImpulse> {
@@ -1046,7 +1089,7 @@ impl ConnectedState {
             .iter()
             .filter_map(|imp| {
                 let age_s = now.duration_since(imp.trigger_at).as_secs_f32();
-                (age_s <= 1.25).then_some(KeyImpulse {
+                (age_s <= 3.0).then_some(KeyImpulse {
                     index: imp.index,
                     nx: imp.nx,
                     ny: imp.ny,
@@ -1055,6 +1098,50 @@ impl ConnectedState {
                 })
             })
             .collect()
+    }
+
+    pub fn is_fn_held(&self) -> bool {
+        self.live_depths
+            .get(&keymap::idx::FN)
+            .is_some_and(|(d, _)| *d >= 0.35)
+    }
+
+    /// Active daemon memory-mapping indicator key slots `(glowing_aqua, bright_pulsing)`.
+    pub fn active_daemon_indicators(&self) -> (BTreeSet<u8>, BTreeSet<u8>) {
+        if !self.shortcut_watcher_active {
+            return (BTreeSet::new(), BTreeSet::new());
+        }
+        let now = Instant::now();
+        let mut active: BTreeSet<u8> = self.daemon_active_snapshot.clone();
+        let mut pulsing: BTreeSet<u8> = self.daemon_pulsing_snapshot.clone();
+
+        for rule in &self.shortcut_rules {
+            if !rule.enabled {
+                continue;
+            }
+            if let Some(m) = rule.modifier_key
+                && self.live_depths.get(&m).is_some_and(|(d, _)| *d >= 0.35)
+            {
+                active.insert(m);
+                active.insert(rule.trigger_key);
+                if self
+                    .live_depths
+                    .get(&rule.trigger_key)
+                    .is_some_and(|(d, _)| *d >= rule.trigger_depth_mm)
+                {
+                    pulsing.insert(rule.trigger_key);
+                }
+            }
+        }
+
+        for (&idx, &ts) in &self.daemon_pulses {
+            if now.saturating_duration_since(ts) < Duration::from_millis(650) {
+                active.insert(idx);
+                pulsing.insert(idx);
+            }
+        }
+
+        (active, pulsing)
     }
 
     /// Return the live mechanical/Hall-effect inspection state for the currently focused key.
@@ -1331,24 +1418,32 @@ impl ConnectedState {
         self.uinput_error = snap.uinput_error;
         self.evdev_grab_active = snap.evdev_grab_active;
         self.shortcut_persist_path = snap.persist_path;
+        self.daemon_active_snapshot = snap.active_indicator_keys.into_iter().collect();
+        self.daemon_pulsing_snapshot = snap.pulsing_indicator_keys.into_iter().collect();
     }
 
     pub fn poll_shortcut_logs_quiet(&mut self) -> bool {
         let Ok(snap) = self.call_with_reconnect(|c| c.get_shortcuts()) else {
             return false;
         };
+        let next_active: BTreeSet<u8> = snap.active_indicator_keys.iter().copied().collect();
+        let next_pulsing: BTreeSet<u8> = snap.pulsing_indicator_keys.iter().copied().collect();
         let changed = snap.recent_triggers.len() != self.shortcut_logs.len()
             || snap.recent_triggers.first().map(|l| l.unix_ms)
                 != self.shortcut_logs.first().map(|l| l.unix_ms)
             || snap.uinput_ready != self.uinput_ready
             || snap.uinput_error != self.uinput_error
-            || snap.evdev_grab_active != self.evdev_grab_active;
+            || snap.evdev_grab_active != self.evdev_grab_active
+            || next_active != self.daemon_active_snapshot
+            || next_pulsing != self.daemon_pulsing_snapshot;
         if changed {
             self.shortcut_logs = snap.recent_triggers;
             self.uinput_ready = snap.uinput_ready;
             self.uinput_error = snap.uinput_error;
             self.evdev_grab_active = snap.evdev_grab_active;
             self.shortcut_persist_path = snap.persist_path;
+            self.daemon_active_snapshot = next_active;
+            self.daemon_pulsing_snapshot = next_pulsing;
         }
         changed
     }
@@ -1374,9 +1469,17 @@ impl ConnectedState {
     }
 
     pub fn trigger_shortcut_rule(&mut self, id: u32) -> Result<ShortcutTriggerLog, String> {
+        let matched = self.shortcut_rules.iter().find(|r| r.id == id).cloned();
         let log = self
             .run_measured("Test Fire Shortcut", |c| c.trigger_shortcut(id))
             .map_err(|e| e.to_string())?;
+        if let Some(rule) = matched {
+            let now = Instant::now();
+            self.daemon_pulses.insert(rule.trigger_key, now);
+            if let Some(m) = rule.modifier_key {
+                self.daemon_pulses.entry(m).or_insert(now);
+            }
+        }
         if let Ok(snap) = self.call_with_reconnect(|c| c.get_shortcuts()) {
             self.apply_shortcuts_snapshot(snap);
         }
@@ -1958,6 +2061,115 @@ pub fn pack_rgb_u32(rgb: [u8; 3]) -> u32 {
     (u32::from(rgb[0]) << 16) | (u32::from(rgb[1]) << 8) | u32::from(rgb[2])
 }
 
+/// Convert sRGB `[0..255]` into HSV `(hue in 0..1, sat in 0..1, val in 0..1)`.
+pub fn rgb_to_hsv(rgb: [u8; 3]) -> [f32; 3] {
+    let r = f32::from(rgb[0]) / 255.0;
+    let g = f32::from(rgb[1]) / 255.0;
+    let b = f32::from(rgb[2]) / 255.0;
+    let max_c = r.max(g).max(b);
+    let min_c = r.min(g).min(b);
+    let delta = max_c - min_c;
+
+    let hue = if delta <= 1e-5 {
+        0.0
+    } else if (max_c - r).abs() <= 1e-5 {
+        ((g - b) / delta).rem_euclid(6.0) / 6.0
+    } else if (max_c - g).abs() <= 1e-5 {
+        ((b - r) / delta + 2.0) / 6.0
+    } else {
+        ((r - g) / delta + 4.0) / 6.0
+    };
+    let sat = if max_c <= 1e-5 { 0.0 } else { delta / max_c };
+    [hue.rem_euclid(1.0), sat.clamp(0.0, 1.0), max_c.clamp(0.0, 1.0)]
+}
+
+/// Convert HSV `(hue in 0..1, sat in 0..1, val in 0..1)` back to sRGB `[0..255]`.
+pub fn hsv_to_rgb_u8(hue: f32, sat: f32, val: f32) -> [u8; 3] {
+    let h = hue.rem_euclid(1.0) * 6.0;
+    let s = sat.clamp(0.0, 1.0);
+    let v = val.clamp(0.0, 1.0);
+    let c = v * s;
+    let x = c * (1.0 - ((h % 2.0) - 1.0).abs());
+    let m = v - c;
+    let (r, g, b) = match h as i32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    [
+        ((r + m) * 255.0).round().clamp(0.0, 255.0) as u8,
+        ((g + m) * 255.0).round().clamp(0.0, 255.0) as u8,
+        ((b + m) * 255.0).round().clamp(0.0, 255.0) as u8,
+    ]
+}
+
+/// Human-readable color description (used in color picker badges & tooltips).
+pub fn describe_rgb_human(rgb: [u8; 3]) -> &'static str {
+    let [h, s, v] = rgb_to_hsv(rgb);
+    if v < 0.08 {
+        return "Off / Black";
+    }
+    if s < 0.14 {
+        return if v > 0.88 {
+            "Pure White"
+        } else if v > 0.45 {
+            "Silver Gray"
+        } else {
+            "Charcoal"
+        };
+    }
+    let deg = h * 360.0;
+    match deg {
+        d if !(14.0..344.0).contains(&d) => "Crimson Red",
+        d if d < 28.0 => "Coral Orange",
+        d if d < 46.0 => "Warm Amber",
+        d if d < 66.0 => "Golden Yellow",
+        d if d < 105.0 => "Lime Green",
+        d if d < 152.0 => "Emerald Green",
+        d if d < 176.0 => "Mint Teal",
+        d if d < 200.0 => "Aqua Blue",
+        d if d < 220.0 => "Sky Blue",
+        d if d < 252.0 => "Cobalt Blue",
+        d if d < 286.0 => "Electric Violet",
+        d if d < 322.0 => "Magenta",
+        _ => "Hot Pink",
+    }
+}
+
+/// Parse hex (`#RRGGBB`, `RRGGBB`, `#RGB`) or `R,G,B` text cleanly (e.g. from Paste Hex).
+pub fn parse_hex_or_rgb(raw: &str) -> Option<[u8; 3]> {
+    let trimmed = raw.trim();
+    if let Some(hex) = trimmed.strip_prefix('#').or_else(|| {
+        trimmed
+            .chars()
+            .all(|c| c.is_ascii_hexdigit())
+            .then_some(trimmed)
+    }) {
+        if hex.len() == 6 {
+            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+            return Some([r, g, b]);
+        }
+        if hex.len() == 3 {
+            let d = |s: &str| u8::from_str_radix(s, 16).ok().map(|v| v * 17);
+            return Some([d(&hex[0..1])?, d(&hex[1..2])?, d(&hex[2..3])?]);
+        }
+    }
+    let parts: Vec<&str> = trimmed.split([',', ' ']).filter(|s| !s.is_empty()).collect();
+    if parts.len() == 3 {
+        return Some([
+            parts[0].parse().ok()?,
+            parts[1].parse().ok()?,
+            parts[2].parse().ok()?,
+        ]);
+    }
+    None
+}
+
 pub fn protocol_light_summary(ls: &LightState) -> String {
     format!(
         "{} | bri {}/4 | spd {}/4 | {} | {}",
@@ -2076,6 +2288,29 @@ mod tests {
         assert!(egg.miku_visible);
         assert!(egg.miku_pose(t3 + Duration::from_millis(500)).scale > 0.9);
         assert!(egg.teto_pose(t3 + Duration::from_millis(500)).scale > 0.9);
+    }
+
+    #[test]
+    fn color_helpers_roundtrip_hsv_and_parse_formats() {
+        for sample in [[0, 215, 255], [245, 158, 11], [168, 85, 247], [255, 0, 85]] {
+            let [h, s, v] = rgb_to_hsv(sample);
+            let back = hsv_to_rgb_u8(h, s, v);
+            assert!(
+                (i16::from(sample[0]) - i16::from(back[0])).abs() <= 2
+                    && (i16::from(sample[1]) - i16::from(back[1])).abs() <= 2
+                    && (i16::from(sample[2]) - i16::from(back[2])).abs() <= 2,
+                "roundtrip mismatch {sample:?} -> {back:?}"
+            );
+        }
+        assert_eq!(describe_rgb_human([0, 215, 255]), "Aqua Blue");
+        assert_eq!(describe_rgb_human([0, 0, 0]), "Off / Black");
+        assert_eq!(describe_rgb_human([255, 255, 255]), "Pure White");
+
+        assert_eq!(parse_hex_or_rgb("#00d7ff"), Some([0, 215, 255]));
+        assert_eq!(parse_hex_or_rgb("38bdf8"), Some([56, 189, 248]));
+        assert_eq!(parse_hex_or_rgb("#f80"), Some([255, 136, 0]));
+        assert_eq!(parse_hex_or_rgb("10, 220, 128"), Some([10, 220, 128]));
+        assert_eq!(parse_hex_or_rgb("not-a-color"), None);
     }
 }
 

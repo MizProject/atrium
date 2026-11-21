@@ -1,8 +1,9 @@
 //! Sidebar page renderers for `reaula-gui`.
 
 use gpui::{
-    Context, Div, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, ScrollDelta,
-    ScrollWheelEvent, Stateful, Window, div, img, prelude::*, px, rgb, rgba,
+    BorderStyle, ClipboardItem, Context, Div, KeyDownEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, Pixels, ScrollDelta, ScrollWheelEvent, Stateful, Window, bounds, canvas, div,
+    fill, img, outline, point, prelude::*, px, rgb, rgba, size,
 };
 
 use reaula_core::audio_fx::{AudioEffectStyle, AudioPalette, NUM_BANDS};
@@ -19,8 +20,8 @@ use crate::kb_3d::{
 use crate::state::{
     AUDIO_DISCLAIMER_COOLDOWN_SECS, ArrowClusterPreset, AudioSourceOption, ConnectedState,
     DropdownId, LightEditorTab, LightViewMode, NavSection, ShortcutActionPreset, SwitchViewMode,
-    format_cap_pills, format_rgb_hex, offline_diagnostic_report, pack_rgb_u32,
-    protocol_light_summary,
+    describe_rgb_human, format_cap_pills, format_rgb_hex, hsv_to_rgb_u8,
+    offline_diagnostic_report, pack_rgb_u32, parse_hex_or_rgb, protocol_light_summary, rgb_to_hsv,
 };
 use crate::theme;
 use crate::widgets::{
@@ -2561,13 +2562,21 @@ impl ReaulaGui {
         on_preset: S,
         on_nudge: N,
         cx: &mut Context<Self>,
-    ) -> Div
+    ) -> Stateful<Div>
     where
         S: Fn(&mut Self, [u8; 3]) + Copy + 'static,
         N: Fn(&mut Self, usize, i16) + Copy + 'static,
     {
+        let [h_raw, sat, val] = rgb_to_hsv(col);
+        let hue = if sat > 0.03 && val > 0.03 {
+            h_raw
+        } else {
+            self.picker_hues.get(id_prefix).copied().unwrap_or(0.54)
+        };
+        let human_name = describe_rgb_human(col);
+        let hex_label = format_rgb_hex(col);
         let matched_name = COLOR_SWATCHES.iter().find(|(_, v)| *v == col).map_or_else(
-            || format!("Custom ({})", format_rgb_hex(col)),
+            || format!("{human_name} ({hex_label})"),
             |(n, _)| (*n).to_string(),
         );
         let choices: Vec<DropdownChoice> = COLOR_SWATCHES
@@ -2580,12 +2589,356 @@ impl ReaulaGui {
             })
             .collect();
 
+        let bounds_sv = self.picker_bounds.clone();
+        let bounds_hue = self.picker_bounds.clone();
+        let bounds_r = self.picker_bounds.clone();
+        let bounds_g = self.picker_bounds.clone();
+        let bounds_b = self.picker_bounds.clone();
+
+        let apply_picker_drag = move |this: &mut Self,
+                                      kind: u8,
+                                      pos_x: Pixels,
+                                      pos_y: Pixels,
+                                      cx: &mut Context<Self>| {
+            let Some(rect) = this.picker_bounds.borrow().get(&(id_prefix, kind)).copied() else {
+                return;
+            };
+            let w = f32::from(rect.size.width).max(1.0);
+            let h = f32::from(rect.size.height).max(1.0);
+            let u = ((f32::from(pos_x) - f32::from(rect.origin.x)) / w).clamp(0.0, 1.0);
+            let v = ((f32::from(pos_y) - f32::from(rect.origin.y)) / h).clamp(0.0, 1.0);
+
+            match kind {
+                0 => {
+                    // 2D Saturation × Brightness (Value) square
+                    let cur_hue = this
+                        .picker_hues
+                        .get(id_prefix)
+                        .copied()
+                        .unwrap_or_else(|| {
+                            let [hr, s, vv] = rgb_to_hsv(col);
+                            if s > 0.03 && vv > 0.03 { hr } else { hue }
+                        });
+                    this.picker_hues.insert(id_prefix, cur_hue);
+                    let next_rgb = hsv_to_rgb_u8(cur_hue, u, 1.0 - v);
+                    on_preset(this, next_rgb);
+                }
+                1 => {
+                    // Rainbow Hue slider
+                    this.picker_hues.insert(id_prefix, u);
+                    let [_, s, vv] = rgb_to_hsv(col);
+                    let next_s = if s < 0.08 && vv < 0.08 {
+                        0.92
+                    } else if s < 0.05 {
+                        0.85
+                    } else {
+                        s
+                    };
+                    let next_v = if vv < 0.08 { 1.0 } else { vv };
+                    on_preset(this, hsv_to_rgb_u8(u, next_s, next_v));
+                }
+                2..=4 => {
+                    let ch = usize::from(kind - 2);
+                    let val_u8 = (u * 255.0).round().clamp(0.0, 255.0) as u8;
+                    let delta = i16::from(val_u8) - i16::from(col[ch]);
+                    if delta != 0 {
+                        on_nudge(this, ch, delta);
+                    }
+                }
+                _ => {}
+            }
+            cx.notify();
+        };
+
+        let sv_box = div()
+            .id((id_prefix, 100usize))
+            .w(px(164.0))
+            .h(px(96.0))
+            .flex_shrink_0()
+            .rounded_md()
+            .overflow_hidden()
+            .border_1()
+            .border_color(rgb(theme::BORDER_MATTE))
+            .cursor_crosshair()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                    this.dragging_picker = Some((id_prefix, 0));
+                    this.picker_hues.entry(id_prefix).or_insert(hue);
+                    apply_picker_drag(this, 0, ev.position.x, ev.position.y, cx);
+                }),
+            )
+            .child(
+                canvas(
+                    move |b, _, _| {
+                        bounds_sv.borrow_mut().insert((id_prefix, 0), b);
+                        b
+                    },
+                    move |b, _, window, _| {
+                        let cols = 20usize;
+                        let rows = 12usize;
+                        let ox = f32::from(b.origin.x);
+                        let oy = f32::from(b.origin.y);
+                        let w = f32::from(b.size.width);
+                        let h = f32::from(b.size.height);
+                        for r in 0..rows {
+                            let y0 = oy + (r as f32 / rows as f32) * h;
+                            let y1 = oy + ((r + 1) as f32 / rows as f32) * h;
+                            let v_mid = 1.0 - (r as f32 + 0.5) / rows as f32;
+                            for c in 0..cols {
+                                let x0 = ox + (c as f32 / cols as f32) * w;
+                                let x1 = ox + ((c + 1) as f32 / cols as f32) * w;
+                                let s_mid = (c as f32 + 0.5) / cols as f32;
+                                let cell = hsv_to_rgb_u8(hue, s_mid, v_mid);
+                                window.paint_quad(fill(
+                                    bounds(point(px(x0), px(y0)), size(px(x1 - x0 + 0.5), px(y1 - y0 + 0.5))),
+                                    rgb(pack_rgb_u32(cell)),
+                                ));
+                            }
+                        }
+                        let rx = ox + sat * w;
+                        let ry = oy + (1.0 - val) * h;
+                        let outer = bounds(point(px(rx - 5.0), px(ry - 5.0)), size(px(10.0), px(10.0)));
+                        let inner = bounds(point(px(rx - 4.0), px(ry - 4.0)), size(px(8.0), px(8.0)));
+                        window.paint_quad(outline(outer, rgb(0x08101c), BorderStyle::Solid));
+                        window.paint_quad(outline(inner, rgb(0xffffff), BorderStyle::Solid));
+                    },
+                )
+                .w_full()
+                .h_full(),
+            );
+
+        let hue_bar = div()
+            .id((id_prefix, 101usize))
+            .w_full()
+            .h(px(16.0))
+            .rounded_sm()
+            .overflow_hidden()
+            .border_1()
+            .border_color(rgb(theme::BORDER_MATTE))
+            .cursor_ew_resize()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                    this.dragging_picker = Some((id_prefix, 1));
+                    apply_picker_drag(this, 1, ev.position.x, ev.position.y, cx);
+                }),
+            )
+            .child(
+                canvas(
+                    move |b, _, _| {
+                        bounds_hue.borrow_mut().insert((id_prefix, 1), b);
+                        b
+                    },
+                    move |b, _, window, _| {
+                        let segs = 36usize;
+                        let ox = f32::from(b.origin.x);
+                        let oy = f32::from(b.origin.y);
+                        let w = f32::from(b.size.width);
+                        let h = f32::from(b.size.height);
+                        for i in 0..segs {
+                            let x0 = ox + (i as f32 / segs as f32) * w;
+                            let x1 = ox + ((i + 1) as f32 / segs as f32) * w;
+                            let cell = hsv_to_rgb_u8((i as f32 + 0.5) / segs as f32, 1.0, 1.0);
+                            window.paint_quad(fill(
+                                bounds(point(px(x0), px(oy)), size(px(x1 - x0 + 0.5), px(h))),
+                                rgb(pack_rgb_u32(cell)),
+                            ));
+                        }
+                        let tx = (ox + hue * w).clamp(ox + 2.0, ox + w - 2.0);
+                        window.paint_quad(fill(
+                            bounds(point(px(tx - 2.5), px(oy)), size(px(5.0), px(h))),
+                            rgb(0x09111e),
+                        ));
+                        window.paint_quad(fill(
+                            bounds(point(px(tx - 1.5), px(oy + 1.0)), size(px(3.0), px((h - 2.0).max(2.0)))),
+                            rgb(0xffffff),
+                        ));
+                    },
+                )
+                .w_full()
+                .h_full(),
+            );
+
+        let swatch_strip = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .gap_1()
+            .children(COLOR_SWATCHES.iter().enumerate().map(|(idx, &(name, sw))| {
+                let selected = col == sw;
+                div()
+                    .id((id_prefix, 300usize + idx))
+                    .w(px(18.0))
+                    .h(px(18.0))
+                    .rounded_sm()
+                    .bg(rgb(pack_rgb_u32(sw)))
+                    .border_1()
+                    .border_color(rgb(if selected {
+                        0xffffff
+                    } else {
+                        theme::BORDER_SUBTLE
+                    }))
+                    .cursor_pointer()
+                    .hover(|s| s.border_color(rgb(theme::BORDER_FOCUS)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let [sh, ss, sv] = rgb_to_hsv(sw);
+                        if ss > 0.03 && sv > 0.03 {
+                            this.picker_hues.insert(id_prefix, sh);
+                        }
+                        this.status_line = format!("Selected {name} ({})", format_rgb_hex(sw));
+                        on_preset(this, sw);
+                        cx.notify();
+                    }))
+            }));
+
+        let rgb_bar_rows: Vec<_> = [
+            (0usize, 2u8, "R", bounds_r, [239u8, 68, 68]),
+            (1, 3u8, "G", bounds_g, [16u8, 220, 128]),
+            (2, 4u8, "B", bounds_b, [56u8, 189, 248]),
+        ]
+        .into_iter()
+        .map(|(ch, kind, ch_lbl, b_rc, accent_rgb)| {
+                    let pct = f32::from(col[ch]) / 255.0;
+                    let mut bar_end = col;
+                    bar_end[ch] = 255;
+                    let mut bar_start = col;
+                    bar_start[ch] = 0;
+
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_1p5()
+                        .child(
+                            div()
+                                .w(px(12.0))
+                                .text_size(px(10.5))
+                                .text_color(rgb(pack_rgb_u32(accent_rgb)))
+                                .child(ch_lbl),
+                        )
+                        .child(
+                            div()
+                                .id((id_prefix, 200usize + usize::from(kind)))
+                                .flex_1()
+                                .min_w(px(90.0))
+                                .h(px(12.0))
+                                .rounded_xs()
+                                .overflow_hidden()
+                                .border_1()
+                                .border_color(rgb(theme::BORDER_MATTE))
+                                .cursor_ew_resize()
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                                        this.dragging_picker = Some((id_prefix, kind));
+                                        apply_picker_drag(this, kind, ev.position.x, ev.position.y, cx);
+                                    }),
+                                )
+                                .child(
+                                    canvas(
+                                        move |b, _, _| {
+                                            b_rc.borrow_mut().insert((id_prefix, kind), b);
+                                            b
+                                        },
+                                        move |b, _, window, _| {
+                                            let ox = f32::from(b.origin.x);
+                                            let oy = f32::from(b.origin.y);
+                                            let w = f32::from(b.size.width);
+                                            let h = f32::from(b.size.height);
+                                            let steps = 16usize;
+                                            for s in 0..steps {
+                                                let t = (s as f32 + 0.5) / steps as f32;
+                                                let x0 = ox + (s as f32 / steps as f32) * w;
+                                                let x1 = ox + ((s + 1) as f32 / steps as f32) * w;
+                                                let mix_c = [
+                                                    (f32::from(bar_start[0]) * (1.0 - t)
+                                                        + f32::from(bar_end[0]) * t)
+                                                        as u8,
+                                                    (f32::from(bar_start[1]) * (1.0 - t)
+                                                        + f32::from(bar_end[1]) * t)
+                                                        as u8,
+                                                    (f32::from(bar_start[2]) * (1.0 - t)
+                                                        + f32::from(bar_end[2]) * t)
+                                                        as u8,
+                                                ];
+                                                window.paint_quad(fill(
+                                                    bounds(point(px(x0), px(oy)), size(px(x1 - x0 + 0.5), px(h))),
+                                                    rgb(pack_rgb_u32(mix_c)),
+                                                ));
+                                            }
+                                            let tx = (ox + pct * w).clamp(ox + 1.5, ox + w - 1.5);
+                                            window.paint_quad(fill(
+                                                bounds(point(px(tx - 1.5), px(oy)), size(px(3.0), px(h))),
+                                                rgb(0xffffff),
+                                            ));
+                                        },
+                                    )
+                                    .w_full()
+                                    .h_full(),
+                                ),
+                        )
+                        .child(
+                            pill((id_prefix, ch * 2), "-5", false).on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    on_nudge(this, ch, -5);
+                                    cx.notify();
+                                },
+                            )),
+                        )
+                        .child(
+                            div()
+                                .w(px(26.0))
+                                .flex()
+                                .justify_center()
+                                .text_xs()
+                                .text_color(rgb(theme::INK_PRIMARY))
+                                .child(format!("{}", col[ch])),
+                        )
+                        .child(
+                            pill((id_prefix, ch * 2 + 1), "+5", false).on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    on_nudge(this, ch, 5);
+                                    cx.notify();
+                                },
+                            )),
+                        )
+        })
+        .collect();
+
+        let rgb_bars = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .children(rgb_bar_rows);
+
         recessed_well()
+            .id((id_prefix, 102usize))
             .flex_1()
-            .min_w(px(330.0))
+            .min_w(px(350.0))
             .flex()
             .flex_col()
             .gap_2p5()
+            .on_mouse_move(cx.listener(move |this, ev: &MouseMoveEvent, _, cx| {
+                if ev.dragging()
+                    && let Some((active_prefix, kind)) = this.dragging_picker
+                    && active_prefix == id_prefix
+                {
+                    apply_picker_drag(this, kind, ev.position.x, ev.position.y, cx);
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| {
+                    this.dragging_picker = None;
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| {
+                    this.dragging_picker = None;
+                }),
+            )
             .child(
                 div()
                     .flex()
@@ -2602,73 +2955,121 @@ impl ReaulaGui {
                             .gap_2()
                             .child(
                                 div()
-                                    .w(px(18.0))
-                                    .h(px(18.0))
-                                    .rounded_sm()
+                                    .w(px(22.0))
+                                    .h(px(22.0))
+                                    .rounded_md()
                                     .bg(rgb(pack_rgb_u32(col)))
                                     .border_1()
                                     .border_color(rgb(theme::BORDER_REGAL)),
                             )
                             .child(
                                 div()
-                                    .text_xs()
-                                    .text_color(rgb(theme::INK_PRIMARY))
-                                    .child(format!("{title} · {}", format_rgb_hex(col))),
+                                    .flex()
+                                    .flex_col()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(theme::INK_PRIMARY))
+                                            .child(format!("{title} · {human_name} · {hex_label}")),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(10.0))
+                                            .text_color(rgb(theme::INK_MUTED))
+                                            .child(format!(
+                                                "Hue {:.0}° · Sat {:.0}% · Bri {:.0}%",
+                                                hue * 360.0,
+                                                sat * 100.0,
+                                                val * 100.0
+                                            )),
+                                    ),
                             ),
                     )
-                    .child(self.render_dropdown(
-                        dropdown_id,
-                        None,
-                        matched_name,
-                        Some(pack_rgb_u32(col)),
-                        None,
-                        160.0,
-                        choices,
-                        move |this, idx, _| {
-                            on_preset(this, COLOR_SWATCHES[idx].1);
-                        },
-                        cx,
-                    )),
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_1p5()
+                            .child(
+                                pill((id_prefix, 103usize), "Copy Hex", false).on_click(
+                                    cx.listener(move |this, _, _, cx| {
+                                        let hex = format_rgb_hex(col);
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            hex.clone(),
+                                        ));
+                                        this.status_line = format!("Copied {hex} to clipboard.");
+                                        cx.notify();
+                                    }),
+                                ),
+                            )
+                            .child(
+                                pill((id_prefix, 104usize), "Paste Hex", false).on_click(
+                                    cx.listener(move |this, _, _, cx| {
+                                        let txt = cx
+                                            .read_from_clipboard()
+                                            .and_then(|item| item.text());
+                                        if let Some(raw) = txt
+                                            && let Some(parsed) = parse_hex_or_rgb(&raw)
+                                        {
+                                            let [ph, ps, pv] = rgb_to_hsv(parsed);
+                                            if ps > 0.03 && pv > 0.03 {
+                                                this.picker_hues.insert(id_prefix, ph);
+                                            }
+                                            on_preset(this, parsed);
+                                            this.status_line = format!(
+                                                "Applied {} ({}) from clipboard.",
+                                                describe_rgb_human(parsed),
+                                                format_rgb_hex(parsed)
+                                            );
+                                        } else {
+                                            this.status_line =
+                                                "Clipboard does not contain #RRGGBB or R,G,B text."
+                                                    .into();
+                                        }
+                                        cx.notify();
+                                    }),
+                                ),
+                            )
+                            .child(self.render_dropdown(
+                                dropdown_id,
+                                None,
+                                matched_name,
+                                Some(pack_rgb_u32(col)),
+                                None,
+                                155.0,
+                                choices,
+                                move |this, idx, _| {
+                                    let sw = COLOR_SWATCHES[idx].1;
+                                    let [sh, ss, sv] = rgb_to_hsv(sw);
+                                    if ss > 0.03 && sv > 0.03 {
+                                        this.picker_hues.insert(id_prefix, sh);
+                                    }
+                                    on_preset(this, sw);
+                                },
+                                cx,
+                            )),
+                    ),
             )
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .flex_wrap()
-                    .items_center()
+                    .items_start()
                     .gap_3()
-                    .children([(0usize, "R"), (1, "G"), (2, "B")].into_iter().map(
-                        |(ch, ch_lbl)| {
-                            div()
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap_1()
-                                .child(
-                                    pill((id_prefix, ch * 2), format!("{ch_lbl}-15"), false)
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            on_nudge(this, ch, -15);
-                                            cx.notify();
-                                        })),
-                                )
-                                .child(
-                                    div()
-                                        .w(px(26.0))
-                                        .flex()
-                                        .justify_center()
-                                        .text_xs()
-                                        .text_color(rgb(theme::INK_PRIMARY))
-                                        .child(format!("{}", col[ch])),
-                                )
-                                .child(
-                                    pill((id_prefix, ch * 2 + 1), format!("{ch_lbl}+15"), false)
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            on_nudge(this, ch, 15);
-                                            cx.notify();
-                                        })),
-                                )
-                        },
-                    )),
+                    .child(sv_box)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(195.0))
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(hue_bar)
+                            .child(swatch_strip)
+                            .child(rgb_bars),
+                    ),
             )
     }
 
@@ -2927,13 +3328,56 @@ impl ReaulaGui {
             );
         }
 
-        top_bar = top_bar
+        let (aqua_keys, aqua_pulsing) = state.active_daemon_indicators();
+        let indicator_row = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .child(pill(
+                        "hk-aqua-legend",
+                        if !aqua_pulsing.is_empty() {
+                            format!(
+                                "Daemon Indicator: AQUA ACTIVE ({} key)",
+                                aqua_pulsing.len()
+                            )
+                        } else if !aqua_keys.is_empty() {
+                            format!(
+                                "Daemon Layer: AQUA GLOW ({} key)",
+                                aqua_keys.len()
+                            )
+                        } else {
+                            "Daemon Layer Glow: Aqua Blue (#00D7FF)".into()
+                        },
+                        !aqua_keys.is_empty(),
+                    ))
+                    .child(pill(
+                        "hk-fw-legend",
+                        format!(
+                            "Firmware Fn Flash: Amber ({} slot)",
+                            state.keyboard_fn_map.len()
+                        ),
+                        state.is_fn_held(),
+                    )),
+            )
             .child(
                 div()
                     .text_xs()
                     .text_color(rgb(theme::INK_MUTED))
-                    .child("Tip: Click = Trigger (focused) · Shift+Click = Modifier · KB:.. = onboard WIN 60 HE flash · RULE = daemon backup with EVIOCGRAB key-leak guard."),
-            )
+                    .child("Click = Trigger · Shift+Click = Modifier · Aqua = Daemon memory mapping · Amber = Hardware Fn flash"),
+            );
+
+        top_bar = top_bar
+            .child(indicator_row)
             .child(self.render_keyboard_canvas(
                 state,
                 KeyboardCanvasMode::HotkeyPicker,

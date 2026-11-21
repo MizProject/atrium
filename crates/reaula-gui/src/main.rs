@@ -7,14 +7,17 @@ mod theme;
 mod views;
 mod widgets;
 
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use clap::Parser;
 use gpui::{
-    App, Application, AsyncApp, Bounds, Context, Div, FocusHandle, KeyDownEvent, RenderImage,
-    WeakEntity, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
+    App, Application, AsyncApp, Bounds, Context, Div, FocusHandle, KeyDownEvent, Pixels,
+    RenderImage, WeakEntity, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
 };
 
 use reaula_core::diagnostics::DiagnosticReport;
@@ -40,6 +43,8 @@ struct Args {
     socket: Option<PathBuf>,
 }
 
+pub(crate) type PickerBoundsMap = Rc<RefCell<BTreeMap<(&'static str, u8), Bounds<Pixels>>>>;
+
 pub(crate) struct ReaulaGui {
     pub(crate) socket: Option<PathBuf>,
     pub(crate) nav: NavSection,
@@ -64,6 +69,9 @@ pub(crate) struct ReaulaGui {
     pub(crate) last_mouse_3d: Option<(f32, f32)>,
     pub(crate) dragging_switch_3d: bool,
     pub(crate) last_mouse_switch_3d: Option<(f32, f32)>,
+    pub(crate) picker_bounds: PickerBoundsMap,
+    pub(crate) picker_hues: BTreeMap<&'static str, f32>,
+    pub(crate) dragging_picker: Option<(&'static str, u8)>,
 
     pub(crate) root_focus: FocusHandle,
     pub(crate) cmd_focus: FocusHandle,
@@ -119,12 +127,14 @@ impl ReaulaGui {
                         if state.audio_disclaimer_modal_open && !state.audio_disclaimer_accepted {
                             changed = true;
                         }
-                        if view.nav == NavSection::Hotkeys
+                        if (view.nav == NavSection::Hotkeys
+                            || view.nav == NavSection::ColorLight)
                             && state.shortcut_watcher_active
-                            && view.last_hotkey_poll.elapsed() >= Duration::from_millis(650)
+                            && view.last_hotkey_poll.elapsed() >= Duration::from_millis(220)
                         {
                             view.last_hotkey_poll = Instant::now();
                             if state.poll_shortcut_logs_quiet() {
+                                view.dirty_3d = true;
                                 changed = true;
                             }
                         }
@@ -173,6 +183,9 @@ impl ReaulaGui {
             last_mouse_3d: None,
             dragging_switch_3d: false,
             last_mouse_switch_3d: None,
+            picker_bounds: Rc::new(RefCell::new(BTreeMap::new())),
+            picker_hues: BTreeMap::new(),
+            dragging_picker: None,
             root_focus: cx.focus_handle(),
             cmd_focus: cx.focus_handle(),
         }
@@ -186,10 +199,17 @@ impl ReaulaGui {
         match state.light_view_mode {
             LightViewMode::ThreeD => self.maybe_render_3d(),
             LightViewMode::TwoD => {
-                if state.effective_preview_custom_frame().is_some() && !state.audio_active {
+                let (aqua_keys, _) = state.active_daemon_indicators();
+                if state.effective_preview_custom_frame().is_some()
+                    && !state.audio_active
+                    && !state.typing_only_effects
+                    && aqua_keys.is_empty()
+                {
                     return false;
                 }
-                let active_anim = state.animate_3d || !state.active_impulses().is_empty();
+                let active_anim = state.animate_3d
+                    || !state.active_impulses().is_empty()
+                    || !aqua_keys.is_empty();
                 if active_anim && self.last_3d_render.elapsed() >= Duration::from_millis(33) {
                     self.last_3d_render = Instant::now();
                     true
@@ -210,8 +230,11 @@ impl ReaulaGui {
         let model_switched = renderer.set_model(state.keyboard_id());
         let mascot_toggled = state.mascots.consume_dirty();
         let impulses = state.active_impulses();
-        let active_anim =
-            state.animate_3d || !impulses.is_empty() || state.mascots.any_visible();
+        let (aqua_keys, aqua_pulsing) = state.active_daemon_indicators();
+        let active_anim = state.animate_3d
+            || !impulses.is_empty()
+            || state.mascots.any_visible()
+            || !aqua_keys.is_empty();
         let anim_due = active_anim && self.last_3d_render.elapsed() >= Duration::from_millis(33);
         let init_needed = self.preview_3d_img.is_none();
         if !(self.dirty_3d || model_switched || mascot_toggled || anim_due || init_needed) {
@@ -233,6 +256,8 @@ impl ReaulaGui {
             time_s: self.start_instant.elapsed().as_secs_f32(),
             miku: state.mascots.miku_pose(now),
             teto: state.mascots.teto_pose(now),
+            daemon_aqua_keys: &aqua_keys,
+            daemon_aqua_pulsing: &aqua_pulsing,
         };
 
         if let Ok(next_img) = renderer.render_frame(&state.camera_3d, &scene) {

@@ -10,18 +10,21 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use reaula_core::diagnostics;
 use reaula_core::ipc::{
-    self, DaemonResponse, ShortcutRule, ShortcutTriggerLog, ShortcutsSnapshot, VirtualKey,
+    self, DAEMON_INDICATOR_AQUA_RGB, DAEMON_INDICATOR_PULSE_RGB, DaemonResponse, ShortcutRule,
+    ShortcutTriggerLog, ShortcutsSnapshot, VirtualKey,
 };
 use reaula_core::keyboards::{KeyDef, KeyboardSpec};
 use reaula_core::keymap;
-use reaula_core::protocol::LiveTravelSample;
+use reaula_core::protocol::{LiveTravelSample, MATRIX_SLOTS};
 
 use crate::{evdev, uinput};
 
 const MAX_SHORTCUT_LOG: usize = 40;
+const INDICATOR_PULSE_WINDOW: Duration = Duration::from_millis(650);
 const SYSTEM_SHORTCUTS_FILE: &str = "/var/lib/reaula/shortcuts.json";
 
 pub(crate) struct ShortcutEngine {
@@ -32,6 +35,7 @@ pub(crate) struct ShortcutEngine {
     modifier_engaged: BTreeSet<u8>,
     latched_rules: BTreeSet<u32>,
     active_virtual_keys: BTreeMap<u32, VirtualKey>,
+    indicator_pulses: BTreeMap<u8, Instant>,
     uinput: Arc<Mutex<Option<uinput::VirtualKeyboard>>>,
     uinput_error: Option<String>,
     suppression: Arc<Mutex<evdev::SuppressionState>>,
@@ -51,6 +55,7 @@ impl Default for ShortcutEngine {
             modifier_engaged: BTreeSet::new(),
             latched_rules: BTreeSet::new(),
             active_virtual_keys: BTreeMap::new(),
+            indicator_pulses: BTreeMap::new(),
             uinput: Arc::new(Mutex::new(None)),
             uinput_error: None,
             suppression: Arc::new(Mutex::new(evdev::SuppressionState::default())),
@@ -74,6 +79,7 @@ impl ShortcutEngine {
             modifier_engaged: BTreeSet::new(),
             latched_rules: BTreeSet::new(),
             active_virtual_keys: BTreeMap::new(),
+            indicator_pulses: BTreeMap::new(),
             uinput,
             uinput_error: None,
             suppression,
@@ -144,6 +150,7 @@ impl ShortcutEngine {
         self.held_keys.clear();
         self.modifier_engaged.clear();
         self.latched_rules.clear();
+        self.indicator_pulses.clear();
         self.release_all_virtual_keys();
         self.sync_evdev();
     }
@@ -369,6 +376,7 @@ impl ShortcutEngine {
             let (success, message) = match self.with_uinput(|kbd| kbd.set_key(vk, true)) {
                 Ok(()) => {
                     self.active_virtual_keys.insert(rule.id, vk);
+                    self.record_rule_pulse(&rule);
                     (true, format!("Held {} ({})", vk.label(), rule.gesture_label()))
                 }
                 Err(msg) => (false, msg),
@@ -384,8 +392,94 @@ impl ShortcutEngine {
             });
         }
 
+        for rule in &fired_external {
+            self.record_rule_pulse(rule);
+        }
+
         self.sync_evdev();
         fired_external
+    }
+
+    pub(crate) fn record_rule_pulse(&mut self, rule: &ShortcutRule) {
+        let now = Instant::now();
+        self.prune_expired_pulses(now);
+        self.indicator_pulses.insert(rule.trigger_key, now);
+        if let Some(m) = rule.modifier_key {
+            self.indicator_pulses.entry(m).or_insert(now);
+        }
+    }
+
+    fn prune_expired_pulses(&mut self, now: Instant) {
+        self.indicator_pulses
+            .retain(|_, ts| now.saturating_duration_since(*ts) < INDICATOR_PULSE_WINDOW);
+    }
+
+    pub(crate) fn has_active_pulses(&self) -> bool {
+        let now = Instant::now();
+        self.indicator_pulses
+            .values()
+            .any(|ts| now.saturating_duration_since(*ts) < INDICATOR_PULSE_WINDOW)
+    }
+
+    /// Compute active daemon-memory indicator keys and actively pulsing keys.
+    ///
+    /// Mirrors firmware Fn-layer indicators cleanly when a daemon chord modifier
+    /// is held or a daemon-level shortcut fires, separated visually in Aqua Blue.
+    pub(crate) fn active_indicator_keys(&self) -> (Vec<u8>, Vec<u8>) {
+        if !self.watcher_active {
+            return (Vec::new(), Vec::new());
+        }
+        let now = Instant::now();
+        let mut active = BTreeSet::new();
+        let mut pulsing = BTreeSet::new();
+
+        for rule in &self.rules {
+            if !rule.enabled {
+                continue;
+            }
+            if let Some(m) = rule.modifier_key
+                && (self.modifier_engaged.contains(&m) || self.held_keys.contains(&m))
+            {
+                active.insert(m);
+                active.insert(rule.trigger_key);
+            }
+            if self.latched_rules.contains(&rule.id) {
+                active.insert(rule.trigger_key);
+                pulsing.insert(rule.trigger_key);
+                if let Some(m) = rule.modifier_key {
+                    active.insert(m);
+                }
+            }
+        }
+
+        for (&idx, &ts) in &self.indicator_pulses {
+            if now.saturating_duration_since(ts) < INDICATOR_PULSE_WINDOW {
+                active.insert(idx);
+                pulsing.insert(idx);
+            }
+        }
+
+        (active.into_iter().collect(), pulsing.into_iter().collect())
+    }
+
+    /// Build an Aqua Blue hardware LED frame when daemon-layer indicators are active.
+    pub(crate) fn build_indicator_colors(&self) -> Option<[[u8; 3]; MATRIX_SLOTS]> {
+        let (active, pulsing) = self.active_indicator_keys();
+        if active.is_empty() && pulsing.is_empty() {
+            return None;
+        }
+        let mut grid = [[0u8; 3]; MATRIX_SLOTS];
+        for idx in active {
+            if let Some(cell) = grid.get_mut(usize::from(idx)) {
+                *cell = DAEMON_INDICATOR_AQUA_RGB;
+            }
+        }
+        for idx in pulsing {
+            if let Some(cell) = grid.get_mut(usize::from(idx)) {
+                *cell = DAEMON_INDICATOR_PULSE_RGB;
+            }
+        }
+        Some(grid)
     }
 
     pub(crate) fn tap_virtual_key(
@@ -417,6 +511,7 @@ impl ShortcutEngine {
     }
 
     pub(crate) fn snapshot_response(&self) -> DaemonResponse {
+        let (active_indicator_keys, pulsing_indicator_keys) = self.active_indicator_keys();
         DaemonResponse::Shortcuts(ShortcutsSnapshot {
             rules: self.rules.clone(),
             watcher_active: self.watcher_active,
@@ -425,6 +520,8 @@ impl ShortcutEngine {
             uinput_error: self.uinput_error.clone(),
             evdev_grab_active: self.evdev.is_grab_active(),
             persist_path: self.persist_path.as_ref().map(|p| p.display().to_string()),
+            active_indicator_keys,
+            pulsing_indicator_keys,
         })
     }
 }
@@ -581,6 +678,74 @@ mod tests {
         // Lifting Fn unlatches the chord even while T stays held.
         let _ = engine.evaluate_sample(&release_fn, 0.01);
         assert!(!engine.latched_rules.contains(&8));
+    }
+
+    #[test]
+    fn indicator_overlay_glows_aqua_blue_for_daemon_layer_and_triggers() {
+        let mut engine = ShortcutEngine::default();
+        engine.set_rules(
+            vec![
+                ShortcutRule {
+                    id: 1,
+                    name: "Fn+R Up".into(),
+                    enabled: true,
+                    modifier_key: Some(keymap::idx::FN),
+                    trigger_key: keymap::idx::R,
+                    trigger_depth_mm: 1.5,
+                    action: ShortcutAction::EmitKey {
+                        key: VirtualKey::Up,
+                    },
+                },
+                ShortcutRule {
+                    id: 2,
+                    name: "Fn+F Down".into(),
+                    enabled: true,
+                    modifier_key: Some(keymap::idx::FN),
+                    trigger_key: keymap::idx::F,
+                    trigger_depth_mm: 1.5,
+                    action: ShortcutAction::EmitKey {
+                        key: VirtualKey::Down,
+                    },
+                },
+            ],
+            true,
+        );
+
+        assert!(engine.build_indicator_colors().is_none());
+
+        // Holding Fn illuminates Fn + all enabled daemon Fn+... mapped keys in Aqua Blue.
+        let hold_fn = LiveTravelSample {
+            row: 5,
+            col: 12,
+            index: keymap::idx::FN,
+            travel_raw: 180,
+        };
+        let _ = engine.evaluate_sample(&hold_fn, 0.01);
+        let grid = engine
+            .build_indicator_colors()
+            .expect("holding Fn should illuminate daemon indicator");
+        assert_eq!(grid[usize::from(keymap::idx::FN)], DAEMON_INDICATOR_AQUA_RGB);
+        assert_eq!(grid[usize::from(keymap::idx::R)], DAEMON_INDICATOR_AQUA_RGB);
+        assert_eq!(grid[usize::from(keymap::idx::F)], DAEMON_INDICATOR_AQUA_RGB);
+        assert_eq!(grid[usize::from(keymap::idx::ESC)], [0, 0, 0]);
+
+        // Latching Fn+R elevates R to the brighter electric Aqua flare.
+        let press_r = LiveTravelSample {
+            row: 2,
+            col: 4,
+            index: keymap::idx::R,
+            travel_raw: 180,
+        };
+        let _ = engine.evaluate_sample(&press_r, 0.01);
+        let (active, pulsing) = engine.active_indicator_keys();
+        assert!(active.contains(&keymap::idx::R));
+        assert!(pulsing.contains(&keymap::idx::R));
+        let flared = engine.build_indicator_colors().unwrap();
+        assert_eq!(flared[usize::from(keymap::idx::R)], DAEMON_INDICATOR_PULSE_RGB);
+
+        // Lifting both clears indicator cleanly once pulse window expires.
+        engine.reset_live_state();
+        assert!(engine.build_indicator_colors().is_none());
     }
 
     #[test]

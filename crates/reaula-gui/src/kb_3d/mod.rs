@@ -25,6 +25,7 @@ use gpui::RenderImage;
 use image::{Frame, RgbaImage};
 use smallvec::SmallVec;
 
+use reaula_core::ipc::{DAEMON_INDICATOR_AQUA_RGB, DAEMON_INDICATOR_PULSE_RGB};
 use reaula_core::keyboards::{KeyDef, KeyboardSpec};
 use reaula_core::keymap::WIN60HE_KEYS;
 use reaula_core::protocol::{LightState, MATRIX_SLOTS};
@@ -123,6 +124,8 @@ pub struct Kb3dSceneInput<'a> {
     pub time_s: f32,
     pub miku: MascotPose,
     pub teto: MascotPose,
+    pub daemon_aqua_keys: &'a BTreeSet<u8>,
+    pub daemon_aqua_pulsing: &'a BTreeSet<u8>,
 }
 
 /// Static 3D scene registration entry for one Aula keyboard model.
@@ -589,13 +592,39 @@ fn compute_typing_response(
 ) -> f32 {
     let mut env = (depth_mm / 1.8).clamp(0.0, 1.0);
     for imp in impulses {
+        let dist = ((nx - imp.nx).powi(2) + (ny - imp.ny).powi(2)).sqrt();
+        if mode == 16 {
+            // Fireworks: glows the pressed key and surrounding cluster for ~2.85s
+            // with varying per-key ember brightness modulation.
+            if imp.age_s > 2.85 || dist > 0.36 {
+                continue;
+            }
+            let fade_fw =
+                (1.0 - imp.age_s / 2.85).clamp(0.0, 1.0).powf(1.35) * imp.strength.clamp(0.35, 1.0);
+            let locality = (1.0 - dist / 0.36).clamp(0.0, 1.0).powf(1.35);
+            let phase_a = (nx * 31.0 + ny * 19.0) * 1.37 + imp.age_s * (5.2 + speed * 2.4);
+            let phase_b = (nx * 17.0 - ny * 29.0) + imp.age_s * (8.6 + speed * 3.1) + imp.nx * 11.0;
+            let vary = 0.44 + 0.56 * (0.5 + 0.5 * (phase_a.sin() * phase_b.cos()));
+            let bloom = (imp.age_s / 0.08).clamp(0.35, 1.0);
+            let core = if imp.index == key_index {
+                fade_fw * (0.72 + 0.28 * (imp.age_s * 9.0).cos().abs())
+            } else {
+                0.0
+            };
+            let hit = (locality * fade_fw * vary * bloom).max(core);
+            if hit > env {
+                env = hit;
+            }
+            continue;
+        }
+
         if imp.age_s > 1.25 {
             continue;
         }
         let fade = (1.0 - imp.age_s / 1.25).clamp(0.0, 1.0).powi(2) * imp.strength.clamp(0.25, 1.0);
-        let dist = ((nx - imp.nx).powi(2) + (ny - imp.ny).powi(2)).sqrt();
         let hit = match mode {
-            8 | 16 => {
+            8 => {
+                // Ripple: expanding wave ring propagating outward across the board.
                 let radius = imp.age_s * (1.15 * speed);
                 let ring = (1.0 - (dist - radius).abs() / 0.16).clamp(0.0, 1.0) * fade;
                 if imp.index == key_index {
@@ -688,11 +717,12 @@ pub fn evaluate_key_colors_for(keys: &[KeyDef], scene: &Kb3dSceneInput<'_>) -> V
 
         let raw_c = if is_typing_reactive_mode(scene.light.mode) {
             let hit_color = if scene.light.full_color {
-                hsv_to_linear(
-                    (nx * 0.75 + ny * 0.35 + t * 0.15).rem_euclid(1.0),
-                    0.94,
-                    1.0,
-                )
+                let spark_hue = if scene.light.mode == 16 {
+                    (nx * 0.65 + ny * 0.45 + (slot as f32) * 0.07 + t * 0.22).rem_euclid(1.0)
+                } else {
+                    (nx * 0.75 + ny * 0.35 + t * 0.15).rem_euclid(1.0)
+                };
+                hsv_to_linear(spark_hue, 0.94, 1.0)
             } else {
                 fg
             };
@@ -774,17 +804,24 @@ pub fn evaluate_key_colors_for(keys: &[KeyDef], scene: &Kb3dSceneInput<'_>) -> V
 
         let press_frac = (depth / 3.4).clamp(0.0, 1.0);
         let dark_fallback = press_frac * 0.12;
-        out[slot] = [
-            (raw_c[0] * bri * (1.0 + 0.25 * press_frac))
-                .max(dark_fallback * 0.6)
-                .min(1.2),
-            (raw_c[1] * bri * (1.0 + 0.25 * press_frac))
-                .max(dark_fallback * 0.85)
-                .min(1.2),
-            (raw_c[2] * bri * (1.0 + 0.25 * press_frac))
-                .max(dark_fallback)
-                .min(1.2),
-        ];
+        if scene.daemon_aqua_pulsing.contains(&k.index) {
+            let pulse = rgb_to_linear(DAEMON_INDICATOR_PULSE_RGB);
+            out[slot] = [pulse[0] * 1.05, pulse[1] * 1.05, pulse[2] * 1.05];
+        } else if scene.daemon_aqua_keys.contains(&k.index) {
+            out[slot] = rgb_to_linear(DAEMON_INDICATOR_AQUA_RGB);
+        } else {
+            out[slot] = [
+                (raw_c[0] * bri * (1.0 + 0.25 * press_frac))
+                    .max(dark_fallback * 0.6)
+                    .min(1.2),
+                (raw_c[1] * bri * (1.0 + 0.25 * press_frac))
+                    .max(dark_fallback * 0.85)
+                    .min(1.2),
+                (raw_c[2] * bri * (1.0 + 0.25 * press_frac))
+                    .max(dark_fallback)
+                    .min(1.2),
+            ];
+        }
     }
 
     out
@@ -1600,6 +1637,7 @@ mod tests {
 
         let depths = [0.0f32; MATRIX_SLOTS];
         let sel = BTreeSet::new();
+        let empty_set = BTreeSet::new();
         let scene = Kb3dSceneInput {
             light: &light,
             custom_colors: None,
@@ -1612,6 +1650,8 @@ mod tests {
             time_s: 0.0,
             miku: MascotPose::default(),
             teto: MascotPose::default(),
+            daemon_aqua_keys: &empty_set,
+            daemon_aqua_pulsing: &empty_set,
         };
         let colors = evaluate_key_colors(&scene);
         assert!(colors[0][0] > 0.9);
@@ -1642,8 +1682,56 @@ mod tests {
             time_s: 1.0,
             miku: MascotPose::default(),
             teto: MascotPose::default(),
+            daemon_aqua_keys: &empty_set,
+            daemon_aqua_pulsing: &empty_set,
         });
         assert!(ripple_silent[0][0] < 0.01);
+
+        // Fireworks (mode 16) persists > 1.5s locally around pressed key while Ripple (mode 8) already faded out.
+        let w_key = WIN60HE_KEYS.iter().find(|k| k.index == 46).unwrap();
+        let w_nx = ((w_key.x as f32 + w_key.width as f32 * 0.5) - 10.0) / 577.0;
+        let w_ny = ((w_key.y as f32 + w_key.height as f32 * 0.5) - 10.0) / 207.0;
+        let aged_imp = [KeyImpulse {
+            index: 46,
+            nx: w_nx,
+            ny: w_ny,
+            age_s: 1.8,
+            strength: 1.0,
+        }];
+        let ripple_aged = evaluate_key_colors(&Kb3dSceneInput {
+            light: &ripple_light,
+            impulses: &aged_imp,
+            ..scene
+        });
+        let fw_light = LightState {
+            mode: 16,
+            ..ripple_light
+        };
+        let fw_aged = evaluate_key_colors(&Kb3dSceneInput {
+            light: &fw_light,
+            impulses: &aged_imp,
+            ..scene
+        });
+        let w_slot = WIN60HE_KEYS.iter().position(|k| k.index == 46).unwrap();
+        let enter_slot = WIN60HE_KEYS.iter().position(|k| k.index == 79).unwrap();
+        assert!(ripple_aged[w_slot][0] < 0.01, "Ripple should fade by 1.8s");
+        assert!(
+            fw_aged[w_slot][0] > 0.12,
+            "Fireworks should still glow locally at 1.8s"
+        );
+        assert!(
+            fw_aged[enter_slot][0] < 0.02,
+            "Fireworks should stay localized near pressed area"
+        );
+
+        // Daemon memory indicator keys glow vivid Aqua Blue regardless of base lighting.
+        let mut aqua_keys = BTreeSet::new();
+        aqua_keys.insert(46);
+        let aqua_out = evaluate_key_colors(&Kb3dSceneInput {
+            daemon_aqua_keys: &aqua_keys,
+            ..scene
+        });
+        assert!(aqua_out[w_slot][2] > 0.9 && aqua_out[w_slot][0] < 0.05);
 
         let mut custom = [[0u8; 3]; MATRIX_SLOTS];
         custom[46] = [0, 255, 128];
@@ -1659,8 +1747,9 @@ mod tests {
             time_s: 0.0,
             miku: MascotPose::default(),
             teto: MascotPose::default(),
+            daemon_aqua_keys: &empty_set,
+            daemon_aqua_pulsing: &empty_set,
         });
-        let w_slot = WIN60HE_KEYS.iter().position(|k| k.index == 46).unwrap();
         assert!(custom_out[w_slot][1] > 0.9);
     }
 
@@ -1726,6 +1815,7 @@ mod tests {
         let light = LightState::default();
         let depths = [0.0f32; MATRIX_SLOTS];
         let sel = BTreeSet::new();
+        let empty = BTreeSet::new();
         let scene = Kb3dSceneInput {
             light: &light,
             custom_colors: None,
@@ -1744,6 +1834,8 @@ mod tests {
                 scale: 1.0,
                 age_s: 0.4,
             },
+            daemon_aqua_keys: &empty,
+            daemon_aqua_pulsing: &empty,
         };
         let frame = renderer.render_frame(&cam, &scene).unwrap();
         let bytes = frame.as_bytes(0).unwrap();

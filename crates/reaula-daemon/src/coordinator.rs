@@ -16,7 +16,8 @@ use reaula_core::ipc::{
 };
 use reaula_core::keyboards::{DriverError, KeyboardSpec};
 use reaula_core::protocol::{
-    BODY_LEN, CalibrationProgress, CalibrationStatus, LiveTravelSample, MATRIX_SLOTS, PollRate,
+    BODY_LEN, CalibrationProgress, CalibrationStatus, LightState, LiveTravelSample, MATRIX_SLOTS,
+    PollRate,
 };
 
 use crate::audio::DaemonAudioEngine;
@@ -62,6 +63,84 @@ struct CalibrationSession {
     tx: Sender<CalibrationProgress>,
 }
 
+struct DaemonIndicatorOverlay {
+    active: bool,
+    brightness: u8,
+    saved_light: Option<LightState>,
+    saved_custom0: Option<[[u8; 3]; MATRIX_SLOTS]>,
+    last_grid: Option<[[u8; 3]; MATRIX_SLOTS]>,
+}
+
+impl DaemonIndicatorOverlay {
+    fn new() -> Self {
+        Self {
+            active: false,
+            brightness: 3,
+            saved_light: None,
+            saved_custom0: None,
+            last_grid: None,
+        }
+    }
+
+    fn clear_without_restore(&mut self) {
+        self.active = false;
+        self.saved_light = None;
+        self.saved_custom0 = None;
+        self.last_grid = None;
+    }
+
+    fn restore(&mut self, drv: Option<&mut (dyn AulaDriver + 'static)>) {
+        if !self.active {
+            return;
+        }
+        self.active = false;
+        self.last_grid = None;
+        if let Some(d) = drv {
+            if let Some(c0) = self.saved_custom0.take() {
+                let _ = d.set_custom_light(0, &c0, self.brightness);
+            }
+            if let Some(ls) = self.saved_light.take() {
+                let _ = d.set_light(&ls);
+            }
+        } else {
+            self.saved_custom0 = None;
+            self.saved_light = None;
+        }
+    }
+
+    fn sync(
+        &mut self,
+        drv: &mut (dyn AulaDriver + 'static),
+        desired: Option<&[[u8; 3]; MATRIX_SLOTS]>,
+        travel_active: bool,
+    ) -> Result<(), DriverError> {
+        match desired {
+            Some(grid) => {
+                if !self.active {
+                    self.saved_light = drv.read_light().ok();
+                    self.saved_custom0 = drv.read_custom_light(0).ok();
+                    self.brightness = self
+                        .saved_light
+                        .as_ref()
+                        .map_or(3, |l| l.brightness.clamp(2, 4));
+                    drv.begin_custom_stream(self.brightness)?;
+                    drv.stream_custom_light(0, grid, true, !travel_active)?;
+                    self.active = true;
+                    self.last_grid = Some(*grid);
+                } else if self.last_grid.as_ref() != Some(grid) {
+                    drv.stream_custom_light(0, grid, false, !travel_active)?;
+                    self.last_grid = Some(*grid);
+                }
+            }
+            None if self.active => {
+                self.restore(Some(drv));
+            }
+            None => {}
+        }
+        Ok(())
+    }
+}
+
 struct HardwareState {
     driver: Option<Box<dyn AulaDriver>>,
     preferred_keyboard: Option<String>,
@@ -69,6 +148,7 @@ struct HardwareState {
     travel_active: bool,
     calibration: Option<CalibrationSession>,
     shortcuts: ShortcutEngine,
+    indicator: DaemonIndicatorOverlay,
     audio: DaemonAudioEngine,
     last_reconnect_attempt: Instant,
 }
@@ -87,6 +167,7 @@ impl HardwareState {
             travel_active: false,
             calibration: None,
             shortcuts: ShortcutEngine::new(shortcuts_path, initial_spec),
+            indicator: DaemonIndicatorOverlay::new(),
             audio: DaemonAudioEngine::new(allowed_uids),
             last_reconnect_attempt: Instant::now() - Duration::from_secs(10),
         };
@@ -131,6 +212,7 @@ impl HardwareState {
     fn drop_on_transport_err(&mut self, err: &DriverError) {
         if matches!(err, DriverError::Transport(_)) {
             self.audio.stop(false, None);
+            self.indicator.clear_without_restore();
             self.driver = None;
             self.travel_active = false;
             self.calibration = None;
@@ -220,6 +302,8 @@ pub(crate) fn hardware_loop(
         } else {
             let timeout = if state.audio.is_active() {
                 Duration::from_millis(8)
+            } else if state.indicator.active || state.shortcuts.has_active_pulses() {
+                Duration::from_millis(30)
             } else {
                 Duration::from_millis(200)
             };
@@ -244,6 +328,7 @@ pub(crate) fn hardware_loop(
             // Drain burst RPCs immediately before polling HID streams.
             while let Ok(next) = rx.try_recv() {
                 if handle_coord_msg(next, &mut state, &shutdown, &allowed_uids, &socket_path) {
+                    state.indicator.restore(state.driver.as_deref_mut());
                     state.audio.stop(true, state.driver.as_deref_mut());
                     state.shortcuts.release_all_virtual_keys();
                     state.stop_active_calibration();
@@ -318,15 +403,30 @@ pub(crate) fn hardware_loop(
             state.sync_travel_stream();
         }
 
-        if state.calibration.is_none()
-            && state.audio.is_active()
-            && let Some(drv) = state.driver.as_deref_mut()
-            && let Err(err) = state.audio.tick_hid(drv, state.travel_active)
-        {
-            state.drop_on_transport_err(&err);
+        if state.calibration.is_none() {
+            let desired_indicator = state.shortcuts.build_indicator_colors();
+            if state.audio.is_active() {
+                state.indicator.clear_without_restore();
+                if let Some(drv) = state.driver.as_deref_mut()
+                    && let Err(err) =
+                        state
+                            .audio
+                            .tick_hid(drv, state.travel_active, desired_indicator.as_ref())
+                {
+                    state.drop_on_transport_err(&err);
+                }
+            } else if let Some(drv) = state.driver.as_deref_mut()
+                && let Err(err) =
+                    state
+                        .indicator
+                        .sync(drv, desired_indicator.as_ref(), state.travel_active)
+            {
+                state.drop_on_transport_err(&err);
+            }
         }
     }
 
+    state.indicator.restore(state.driver.as_deref_mut());
     state.audio.stop(true, state.driver.as_deref_mut());
     state.shortcuts.release_all_virtual_keys();
     state.stop_active_calibration();
@@ -390,6 +490,9 @@ fn handle_coord_msg(
             if state.calibration.is_some() {
                 let _ = reply_tx.send(Err("calibration is already in progress".into()));
                 return false;
+            }
+            if state.indicator.active {
+                state.indicator.restore(state.driver.as_deref_mut());
             }
             if state.audio.is_active() {
                 state.audio.stop(true, state.driver.as_deref_mut());
@@ -494,6 +597,7 @@ fn handle_coord_msg(
                         .cloned()
                     {
                         let log = apply_shortcut_rule(&rule, state, allowed_uids);
+                        state.shortcuts.record_rule_pulse(&rule);
                         state.shortcuts.push_log(log.clone());
                         state.sync_travel_stream();
                         DaemonResponse::ShortcutTriggered(log)
@@ -514,6 +618,7 @@ fn handle_coord_msg(
                     } else if let Err(e) = state.ensure_connected(true) {
                         DaemonResponse::Error { message: e }
                     } else {
+                        state.indicator.restore(state.driver.as_deref_mut());
                         let drv = state.driver.as_deref_mut().expect("driver connected");
                         match state.audio.start(config, drv) {
                             Ok(st) => DaemonResponse::AudioSync(Box::new(st)),
@@ -563,10 +668,23 @@ fn execute_rpc(req: DaemonRequest, state: &mut HardwareState) -> DaemonResponse 
     }
     if matches!(
         req,
-        DaemonRequest::SetLight { .. } | DaemonRequest::SetCustomRgb { .. }
-    ) && state.audio.is_active()
+        DaemonRequest::SetLight { .. }
+            | DaemonRequest::SetCustomRgb { .. }
+            | DaemonRequest::BeginCustomStream { .. }
+            | DaemonRequest::StreamCustomRgb { .. }
+    ) {
+        state.indicator.clear_without_restore();
+        if state.audio.is_active() {
+            state.audio.stop(false, state.driver.as_deref_mut());
+        }
+    } else if matches!(
+        req,
+        DaemonRequest::GetLight
+            | DaemonRequest::GetActiveCustomSlot
+            | DaemonRequest::GetCustomRgb { .. }
+    ) && state.indicator.active
     {
-        state.audio.stop(false, state.driver.as_deref_mut());
+        state.indicator.restore(state.driver.as_deref_mut());
     }
     if matches!(
         req,
@@ -796,6 +914,9 @@ fn run_daemon_diagnostics(
             remedy: Some("Finish or abort calibration before running full HID diagnostics.".into()),
         });
     } else {
+        if state.indicator.active {
+            state.indicator.restore(state.driver.as_deref_mut());
+        }
         let link_t = Instant::now();
         match state.ensure_connected(true) {
             Ok(_) => {
@@ -908,6 +1029,13 @@ fn apply_shortcut_rule(
             success: false,
             message: e,
         };
+    }
+
+    if matches!(
+        rule.action,
+        ShortcutAction::LightingPreset { .. } | ShortcutAction::ToggleLighting
+    ) {
+        state.indicator.clear_without_restore();
     }
 
     let drv = state.driver.as_deref_mut().expect("driver connected");

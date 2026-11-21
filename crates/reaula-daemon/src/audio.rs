@@ -221,6 +221,7 @@ impl DaemonAudioEngine {
         &mut self,
         drv: &mut dyn AulaDriver,
         travel_active: bool,
+        indicator_overlay: Option<&[[u8; 3]; MATRIX_SLOTS]>,
     ) -> Result<(), DriverError> {
         if !self.active {
             return Ok(());
@@ -232,7 +233,7 @@ impl DaemonAudioEngine {
             };
             if t.fatal_error.is_some() {
                 None
-            } else if t.frame_seq > self.last_sent_seq {
+            } else if t.frame_seq > self.last_sent_seq || indicator_overlay.is_some() {
                 Some((t.frame_seq, t.frame))
             } else {
                 None
@@ -250,14 +251,25 @@ impl DaemonAudioEngine {
             return Ok(());
         }
 
-        let Some((seq, grid)) = maybe_frame else {
+        let Some((seq, mut grid)) = maybe_frame else {
             return Ok(());
         };
 
+        if let Some(overlay) = indicator_overlay {
+            for (dst, &ov) in grid.iter_mut().zip(overlay.iter()) {
+                if ov != [0, 0, 0] {
+                    *dst = ov;
+                }
+            }
+        }
+
+        let new_audio_frame = seq > self.last_sent_seq;
         match drv.stream_custom_light(0, &grid, self.frames_rendered == 0, !travel_active) {
             Ok(sent) => {
                 self.last_sent_seq = seq;
-                self.frames_rendered += 1;
+                if new_audio_frame {
+                    self.frames_rendered += 1;
+                }
                 self.packets_total += sent as u64;
                 self.packets_last = sent;
                 Ok(())
@@ -805,7 +817,7 @@ mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
-            eng.tick_hid(&mut drv, false).expect("tick ok");
+            eng.tick_hid(&mut drv, false, None).expect("tick ok");
             if drv.stream_count >= 2 {
                 break;
             }

@@ -19,15 +19,23 @@ use crate::state::{
 };
 use crate::theme;
 
-pub const COLOR_SWATCHES: [(&str, [u8; 3]); 8] = [
-    ("Red", [255, 0, 0]),
-    ("Cyan", [0, 216, 255]),
-    ("Emerald", [16, 220, 128]),
-    ("Violet", [168, 85, 247]),
+pub const COLOR_SWATCHES: [(&str, [u8; 3]); 16] = [
+    ("Off / Black", [0, 0, 0]),
+    ("Pure White", [255, 255, 255]),
+    ("Ice Blue", [186, 230, 253]),
+    ("Crimson", [239, 35, 60]),
+    ("Coral", [255, 107, 107]),
+    ("Orange", [255, 122, 0]),
     ("Amber", [245, 158, 11]),
-    ("Rose", [244, 63, 94]),
-    ("Blue", [59, 130, 246]),
-    ("White", [255, 255, 255]),
+    ("Gold", [250, 204, 21]),
+    ("Lime", [132, 204, 22]),
+    ("Emerald", [16, 220, 128]),
+    ("Mint", [45, 212, 191]),
+    ("Aqua Blue", [0, 215, 255]),
+    ("Sky Blue", [56, 189, 248]),
+    ("Royal Blue", [59, 130, 246]),
+    ("Violet", [168, 85, 247]),
+    ("Hot Pink", [244, 63, 148]),
 ];
 
 pub const SWITCH_OPTIONS: [(u8, &str); 4] = [(1, "HM1"), (2, "HH1"), (3, "CY1"), (5, "TC1")];
@@ -520,6 +528,8 @@ impl ReaulaGui {
         } else {
             Vec::new()
         };
+        let (aqua_keys, aqua_pulsing) = state.active_daemon_indicators();
+        let fn_held = state.is_fn_held();
         let preview_colors = if mode == KeyboardCanvasMode::ColorMockup {
             let depths = state.live_depths_array();
             let custom_ref = state.effective_preview_custom_frame();
@@ -535,6 +545,8 @@ impl ReaulaGui {
                 time_s,
                 miku: MascotPose::default(),
                 teto: MascotPose::default(),
+                daemon_aqua_keys: &aqua_keys,
+                daemon_aqua_pulsing: &aqua_pulsing,
             };
             Some(kb_3d::evaluate_key_colors(&scene))
         } else {
@@ -733,21 +745,41 @@ impl ReaulaGui {
                     let is_draft_target = state.draft_rule_key == k.index;
                     let kb_fn_hid = state.keyboard_fn_map.get(&k.index).copied();
                     let has_rule = existing_shortcut_keys.contains(&k.index);
-                    let bg: Hsla = if is_draft_target || is_draft_mod || kb_fn_hid.is_some() {
+                    let is_aqua = aqua_keys.contains(&k.index);
+                    let is_aqua_pulse = aqua_pulsing.contains(&k.index);
+                    let is_fw_glow = fn_held && kb_fn_hid.is_some();
+
+                    let bg: Hsla = if is_aqua_pulse {
+                        rgb(0x0f5e75).into()
+                    } else if is_aqua {
+                        rgb(0x083b4d).into()
+                    } else if is_fw_glow {
+                        rgb(0x3a2810).into()
+                    } else if is_draft_target || is_draft_mod || kb_fn_hid.is_some() {
                         rgb(theme::SHADE_REGAL).into()
                     } else {
                         rgb(theme::SHADE_BASE).into()
                     };
-                    let border = if is_draft_target {
+                    let border = if is_aqua_pulse {
+                        0x7ef9ff
+                    } else if is_aqua {
+                        0x00d7ff
+                    } else if is_fw_glow {
+                        0xf59e0b
+                    } else if is_draft_target {
                         theme::BORDER_FOCUS
+                    } else if kb_fn_hid.is_some() {
+                        theme::BORDER_WARN
                     } else if is_draft_mod || has_rule {
                         theme::BORDER_REGAL
-                    } else if kb_fn_hid.is_some() {
-                        theme::BORDER_MATTE
                     } else {
                         theme::BORDER_SUBTLE
                     };
-                    let sub = if is_draft_target {
+                    let sub = if is_aqua_pulse {
+                        "ACTV".into()
+                    } else if is_aqua {
+                        "AQUA".into()
+                    } else if is_draft_target {
                         "TRIG".into()
                     } else if is_draft_mod {
                         "MOD".into()
@@ -758,12 +790,16 @@ impl ReaulaGui {
                     } else {
                         format!("#{}", k.index)
                     };
-                    let sub_c = if is_draft_target {
+                    let sub_c = if is_aqua_pulse {
+                        0xc4feff
+                    } else if is_aqua {
+                        0x4eeeff
+                    } else if is_fw_glow || kb_fn_hid.is_some() {
+                        theme::INK_WARN
+                    } else if is_draft_target {
                         theme::INK_PRIMARY
                     } else if is_draft_mod {
                         theme::INK_ACCENT
-                    } else if kb_fn_hid.is_some() {
-                        theme::INK_OK
                     } else if has_rule {
                         theme::INK_SECONDARY
                     } else {

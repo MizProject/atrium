@@ -321,6 +321,11 @@ impl ShortcutRule {
     }
 }
 
+/// Soft Aqua Blue LED color used when daemon memory-mapping indicators activate (distinct from firmware indicators).
+pub const DAEMON_INDICATOR_AQUA_RGB: [u8; 3] = [0, 215, 255];
+/// Bright Electric Aqua flash when a daemon shortcut triggers or latches.
+pub const DAEMON_INDICATOR_PULSE_RGB: [u8; 3] = [110, 252, 255];
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShortcutsSnapshot {
     pub rules: Vec<ShortcutRule>,
@@ -334,6 +339,10 @@ pub struct ShortcutsSnapshot {
     pub evdev_grab_active: bool,
     #[serde(default)]
     pub persist_path: Option<String>,
+    #[serde(default)]
+    pub active_indicator_keys: Vec<u8>,
+    #[serde(default)]
+    pub pulsing_indicator_keys: Vec<u8>,
 }
 
 /// One hardware Fn-layer keymap override stored in WIN 60 HE flash (`cmd 0x18`).
