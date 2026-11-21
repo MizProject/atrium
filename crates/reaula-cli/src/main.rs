@@ -5,6 +5,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+mod systemd_ctl;
+
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[cfg(target_os = "linux")]
@@ -319,16 +321,46 @@ impl From<AudioPaletteArg> for AudioPalette {
 
 #[derive(Subcommand)]
 enum DaemonAction {
-    /// Check whether reaulad is running and display peer-credential security state
-    Status,
-    /// Start reaulad detached in the background (prompts for sudo if hidraw requires root)
+    /// Check whether reaulad is running and display peer-credential & systemd state
+    Status {
+        /// Query systemd unit status alongside IPC state
+        #[arg(long)]
+        systemd: bool,
+        #[command(flatten)]
+        target: systemd_ctl::SystemdTargetArgs,
+    },
+    /// Start reaulad detached in the background (or via systemd with --systemd)
     Start {
-        /// Run in foreground instead of detaching
+        /// Run in foreground instead of detaching (ignored with --systemd)
         #[arg(long)]
         foreground: bool,
+        /// Start reaulad cleanly via systemd unit instead of detached background spawn
+        #[arg(long)]
+        systemd: bool,
+        #[command(flatten)]
+        target: systemd_ctl::SystemdTargetArgs,
     },
-    /// Stop the running reaulad instance cleanly
-    Stop,
+    /// Stop the running reaulad instance cleanly (or stop its systemd unit with --systemd)
+    Stop {
+        /// Stop reaulad cleanly via systemd unit instead of IPC shutdown alone
+        #[arg(long)]
+        systemd: bool,
+        #[command(flatten)]
+        target: systemd_ctl::SystemdTargetArgs,
+    },
+    /// Restart reaulad cleanly (or restart via systemd with --systemd)
+    Restart {
+        /// Restart reaulad cleanly via systemd unit
+        #[arg(long)]
+        systemd: bool,
+        #[command(flatten)]
+        target: systemd_ctl::SystemdTargetArgs,
+    },
+    /// Install, inspect, enable, start, stop, or view logs for reaulad systemd services
+    Systemd {
+        #[command(subcommand)]
+        action: systemd_ctl::SystemdAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1005,8 +1037,20 @@ fn launch_sibling(bin_name: &str, socket: Option<&Path>) -> Result<(), CliError>
 }
 
 fn cmd_daemon(action: DaemonAction, policy: ConnectionPolicy<'_>) -> Result<(), CliError> {
+    let map_sd_err = |(msg, code): (String, Option<ExitCode>)| match code {
+        Some(c) => {
+            eprintln!("error: {msg}");
+            CliError::ChildExit(c)
+        }
+        None => CliError::Message(msg),
+    };
+
     match action {
-        DaemonAction::Status => {
+        DaemonAction::Status { systemd, target } => {
+            if systemd {
+                return systemd_ctl::print_systemd_status(&target, policy.socket)
+                    .map_err(map_sd_err);
+            }
             let mut client = DaemonClient::connect(policy.socket).map_err(|e| {
                 CliError::Message(format!(
                     "reaulad is not reachable at {}: {e}",
@@ -1015,6 +1059,25 @@ fn cmd_daemon(action: DaemonAction, policy: ConnectionPolicy<'_>) -> Result<(), 
             })?;
             let st = client.ping().map_err(|e| e.to_string())?;
             println!("reaulad status  : running");
+            println!(
+                "Service Manager : {}",
+                if st.systemd_managed {
+                    "systemd (Type=notify)"
+                } else {
+                    "standalone / detached"
+                }
+            );
+            let scope = if target.user {
+                systemd_ctl::UnitScope::User
+            } else {
+                systemd_ctl::UnitScope::System
+            };
+            if let Ok(unit) = systemd_ctl::resolve_unit_name(scope, target.unit.as_deref())
+                && let Some(unit_state) = systemd_ctl::query_unit_active_state(scope, &unit)
+                && unit_state == "active"
+            {
+                println!("Systemd Unit    : {unit} ({unit_state})");
+            }
             println!("Socket          : {}", st.socket_path);
             println!(
                 "Daemon PID/UID  : pid={} uid={}",
@@ -1032,7 +1095,11 @@ fn cmd_daemon(action: DaemonAction, policy: ConnectionPolicy<'_>) -> Result<(), 
             println!("Travel clients  : {}", st.travel_subscribers);
             Ok(())
         }
-        DaemonAction::Stop => {
+        DaemonAction::Stop { systemd, target } => {
+            if systemd {
+                return systemd_ctl::stop_systemd_unit(&target, policy.socket, policy.no_sudo)
+                    .map_err(map_sd_err);
+            }
             let mut client = DaemonClient::connect(policy.socket).map_err(|e| e.to_string())?;
             let sock = ipc::discover_client_socket_path(policy.socket);
             client.shutdown().map_err(|e| e.to_string())?;
@@ -1046,7 +1113,15 @@ fn cmd_daemon(action: DaemonAction, policy: ConnectionPolicy<'_>) -> Result<(), 
             println!("Stopped reaulad cleanly.");
             Ok(())
         }
-        DaemonAction::Start { foreground } => {
+        DaemonAction::Start {
+            foreground,
+            systemd,
+            target,
+        } => {
+            if systemd {
+                return systemd_ctl::start_systemd_unit(&target, policy.socket, policy.no_sudo)
+                    .map_err(map_sd_err);
+            }
             if DaemonClient::connect(policy.socket).is_ok() {
                 println!("reaulad is already running.");
                 return Ok(());
@@ -1103,6 +1178,34 @@ fn cmd_daemon(action: DaemonAction, policy: ConnectionPolicy<'_>) -> Result<(), 
                     "reaulad exited with status {status}"
                 )))
             }
+        }
+        DaemonAction::Restart { systemd, target } => {
+            if systemd {
+                return systemd_ctl::restart_systemd_unit(&target, policy.socket, policy.no_sudo)
+                    .map_err(map_sd_err);
+            }
+            if DaemonClient::connect(policy.socket).is_ok() {
+                cmd_daemon(
+                    DaemonAction::Stop {
+                        systemd: false,
+                        target: target.clone(),
+                    },
+                    policy,
+                )?;
+            }
+            cmd_daemon(
+                DaemonAction::Start {
+                    foreground: false,
+                    systemd: false,
+                    target,
+                },
+                policy,
+            )
+        }
+        DaemonAction::Systemd { action } => {
+            let sibling = sibling_binary("reaulad").ok();
+            systemd_ctl::handle_systemd_action(action, sibling, policy.socket, policy.no_sudo)
+                .map_err(map_sd_err)
         }
     }
 }
@@ -2570,6 +2673,37 @@ mod tests {
 
         let doc = Cli::try_parse_from(["reaula", "doctor"]).unwrap();
         assert!(matches!(doc.command, Command::Doctor));
+
+        let sd_start = Cli::try_parse_from(["reaula", "daemon", "start", "--systemd"]).unwrap();
+        assert!(matches!(
+            sd_start.command,
+            Command::Daemon {
+                action: DaemonAction::Start { systemd: true, .. }
+            }
+        ));
+
+        let sd_inst = Cli::try_parse_from([
+            "reaula",
+            "daemon",
+            "systemd",
+            "install",
+            "--user",
+            "--enable",
+            "--start",
+        ])
+        .unwrap();
+        assert!(matches!(
+            sd_inst.command,
+            Command::Daemon {
+                action: DaemonAction::Systemd {
+                    action: systemd_ctl::SystemdAction::Install {
+                        enable: true,
+                        start: true,
+                        ..
+                    }
+                }
+            }
+        ));
     }
 
     #[test]

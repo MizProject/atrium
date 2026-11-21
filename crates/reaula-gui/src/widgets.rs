@@ -8,6 +8,7 @@ use gpui::{
     Stateful, anchored, deferred, div, point, prelude::*, px, rgb, rgba,
 };
 
+use reaula_core::ipc::{ShortcutAction, ShortcutRule, VirtualKey};
 use reaula_core::keymap::{KEYBOARD_CANVAS_HEIGHT, KEYBOARD_CANVAS_WIDTH, WIN60HE_KEYS};
 use reaula_core::protocol::TriggerMode;
 
@@ -15,7 +16,8 @@ use crate::ReaulaGui;
 use crate::icons::{self, MaterialIcon};
 use crate::kb_3d::{self, Kb3dSceneInput, MascotPose, switch::stem_color_hex_for_switch};
 use crate::state::{
-    ConnectedState, DropdownId, SwitchInspectionSnapshot, format_rgb_hex, pack_rgb_u32,
+    ConnectedState, DropdownId, KeymapCategory, KeymapLayerView, SwitchInspectionSnapshot,
+    format_rgb_hex, pack_rgb_u32,
 };
 use crate::theme;
 
@@ -57,6 +59,59 @@ pub enum ButtonTone {
     Secondary,
     Warn { active: bool },
     Danger,
+}
+
+/// Archival category pill (`[FW]` Amber MCU flash vs. `[DM]` Aqua daemon memory).
+pub fn category_badge(
+    label: impl Into<SharedString>,
+    is_firmware: bool,
+    emphasized: bool,
+) -> Div {
+    let (bg, border, ink) = if is_firmware {
+        (
+            if emphasized {
+                theme::FW_AMBER_GLOW
+            } else {
+                theme::FW_AMBER_BG
+            },
+            theme::FW_AMBER_BORDER,
+            theme::FW_AMBER_INK,
+        )
+    } else {
+        (
+            if emphasized {
+                theme::DM_AQUA_ACTIVE
+            } else {
+                theme::DM_AQUA_BG
+            },
+            theme::DM_AQUA_BORDER,
+            theme::DM_AQUA_INK,
+        )
+    };
+    div()
+        .px_2()
+        .py_0p5()
+        .rounded_sm()
+        .bg(rgb(bg))
+        .border_1()
+        .border_color(rgb(border))
+        .text_size(px(10.0))
+        .text_color(rgb(ink))
+        .whitespace_nowrap()
+        .child(label.into())
+}
+
+/// Small neutral action-type badge for `[DM]` Daemon rules (`uinput Key`, `Shell Cmd`, etc.).
+pub fn action_kind_tag(action: &ShortcutAction) -> &'static str {
+    match action {
+        ShortcutAction::EmitKey { .. } => "uinput Key",
+        ShortcutAction::ActuationPreset { .. } => "Actuation",
+        ShortcutAction::ToggleSocd => "SOCD",
+        ShortcutAction::LightingPreset { .. } => "Lighting",
+        ShortcutAction::ToggleLighting => "LED Power",
+        ShortcutAction::SetPollRate { .. } => "Poll Rate",
+        ShortcutAction::RunCommand { .. } => "Shell Cmd",
+    }
 }
 
 /// Uniform paper-matte toggle / filter pill with optional Material Icon.
@@ -553,16 +608,7 @@ impl ReaulaGui {
             None
         };
 
-        let existing_shortcut_keys: Vec<u8> = if mode == KeyboardCanvasMode::HotkeyPicker {
-            state
-                .shortcut_rules
-                .iter()
-                .filter(|r| r.enabled)
-                .map(|r| r.trigger_key)
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let hotkey_filter = state.keymap_layer_view;
 
         let mut canvas = div()
             .relative()
@@ -633,6 +679,9 @@ impl ReaulaGui {
             let is_focused = state.focused_key == k.index;
             let live_mm = state.live_depths.get(&k.index).map(|(m, _)| *m);
             let is_cal_done = state.cal_calibrated.contains(&k.index);
+
+            let mut hotkey_top_tag: Option<(&'static str, u32)> = None;
+            let mut hotkey_bar: Option<(u32, Option<u32>, f32)> = None;
 
             let (key_bg, border_color, top_line, sub_label, sub_color) = match mode {
                 KeyboardCanvasMode::ActuationAndTravel => {
@@ -741,71 +790,23 @@ impl ReaulaGui {
                     )
                 }
                 KeyboardCanvasMode::HotkeyPicker => {
-                    let is_draft_mod = state.draft_rule_modifier == Some(k.index);
-                    let is_draft_target = state.draft_rule_key == k.index;
-                    let kb_fn_hid = state.keyboard_fn_map.get(&k.index).copied();
-                    let has_rule = existing_shortcut_keys.contains(&k.index);
-                    let is_aqua = aqua_keys.contains(&k.index);
-                    let is_aqua_pulse = aqua_pulsing.contains(&k.index);
-                    let is_fw_glow = fn_held && kb_fn_hid.is_some();
-
-                    let bg: Hsla = if is_aqua_pulse {
-                        rgb(0x0f5e75).into()
-                    } else if is_aqua {
-                        rgb(0x083b4d).into()
-                    } else if is_fw_glow {
-                        rgb(0x3a2810).into()
-                    } else if is_draft_target || is_draft_mod || kb_fn_hid.is_some() {
-                        rgb(theme::SHADE_REGAL).into()
-                    } else {
-                        rgb(theme::SHADE_BASE).into()
-                    };
-                    let border = if is_aqua_pulse {
-                        0x7ef9ff
-                    } else if is_aqua {
-                        0x00d7ff
-                    } else if is_fw_glow {
-                        0xf59e0b
-                    } else if is_draft_target {
-                        theme::BORDER_FOCUS
-                    } else if kb_fn_hid.is_some() {
-                        theme::BORDER_WARN
-                    } else if is_draft_mod || has_rule {
-                        theme::BORDER_REGAL
-                    } else {
-                        theme::BORDER_SUBTLE
-                    };
-                    let sub = if is_aqua_pulse {
-                        "ACTV".into()
-                    } else if is_aqua {
-                        "AQUA".into()
-                    } else if is_draft_target {
-                        "TRIG".into()
-                    } else if is_draft_mod {
-                        "MOD".into()
-                    } else if let Some(hid) = kb_fn_hid {
-                        short_kb_fn_badge(hid)
-                    } else if has_rule {
-                        "RULE".into()
-                    } else {
-                        format!("#{}", k.index)
-                    };
-                    let sub_c = if is_aqua_pulse {
-                        0xc4feff
-                    } else if is_aqua {
-                        0x4eeeff
-                    } else if is_fw_glow || kb_fn_hid.is_some() {
-                        theme::INK_WARN
-                    } else if is_draft_target {
-                        theme::INK_PRIMARY
-                    } else if is_draft_mod {
-                        theme::INK_ACCENT
-                    } else if has_rule {
-                        theme::INK_SECONDARY
-                    } else {
-                        theme::INK_MUTED
-                    };
-                    (bg, border, theme::INK_PRIMARY, sub, sub_c)
+                    let vis = hotkey_key_appearance(
+                        state,
+                        hotkey_filter,
+                        k.index,
+                        fn_held,
+                        &aqua_keys,
+                        &aqua_pulsing,
+                    );
+                    hotkey_top_tag = vis.top_tag;
+                    hotkey_bar = vis.bottom_bar;
+                    (
+                        rgb(vis.bg).into(),
+                        vis.border,
+                        theme::INK_PRIMARY,
+                        vis.sub_label,
+                        vis.sub_color,
+                    )
                 }
                 KeyboardCanvasMode::DiagnosticsDepth => {
                     let stat = state.switch_tests.get(&k.index);
@@ -876,7 +877,9 @@ impl ReaulaGui {
                 }
             };
 
-            let diag_bar_fill = if mode == KeyboardCanvasMode::DiagnosticsDepth {
+            let bottom_bar_fill = if let Some((left_col, right_col, frac)) = hotkey_bar {
+                Some((left_col, right_col, frac))
+            } else if mode == KeyboardCanvasMode::DiagnosticsDepth {
                 let measured = live_mm
                     .or_else(|| state.switch_tests.get(&k.index).map(|s| s.peak_mm))
                     .unwrap_or(0.0);
@@ -894,12 +897,13 @@ impl ReaulaGui {
                 } else {
                     theme::BORDER_SUBTLE
                 };
-                Some((frac, bar_col))
+                Some((bar_col, None, frac))
             } else {
                 None
             };
 
             let key_index = k.index;
+            let key_font_top = 9.5 * (scale / KB_SCALE_DEFAULT).clamp(0.85, 1.05);
             let mut key_tile = div()
                     .id(("kb-key", (mode as usize) * 256 + usize::from(key_index)))
                     .absolute()
@@ -941,9 +945,26 @@ impl ReaulaGui {
                     )
                     .child(
                         div()
-                            .text_size(px(9.5 * (scale / KB_SCALE_DEFAULT).clamp(0.85, 1.05)))
-                            .text_color(rgb(top_line))
-                            .child(k.name),
+                            .w_full()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .gap_0p5()
+                            .child(
+                                div()
+                                    .text_size(px(key_font_top))
+                                    .text_color(rgb(top_line))
+                                    .child(k.name),
+                            )
+                            .when_some(hotkey_top_tag, |row, (tag, tag_col)| {
+                                row.child(
+                                    div()
+                                        .text_size(px(7.5))
+                                        .text_color(rgb(tag_col))
+                                        .child(tag),
+                                )
+                            }),
                     )
                     .child(
                         div()
@@ -951,17 +972,24 @@ impl ReaulaGui {
                             .text_color(rgb(sub_color))
                             .child(sub_label),
                     );
-            if let Some((frac, bar_col)) = diag_bar_fill {
-                let fill_w = ((kw - 6.0).max(4.0) * frac).max(0.0);
-                key_tile = key_tile.child(
-                    div()
-                        .w_full()
-                        .h(px(2.5))
-                        .rounded_xs()
-                        .bg(rgb(0x0b1424))
-                        .overflow_hidden()
-                        .child(div().w(px(fill_w)).h_full().bg(rgb(bar_col))),
-                );
+            if let Some((left_col, right_col, frac)) = bottom_bar_fill {
+                let track_w = (kw - 6.0).max(4.0);
+                let mut bar = div()
+                    .w_full()
+                    .h(px(2.5))
+                    .rounded_xs()
+                    .bg(rgb(0x0b1424))
+                    .overflow_hidden()
+                    .flex()
+                    .flex_row();
+                if let Some(rc) = right_col {
+                    bar = bar
+                        .child(div().flex_1().h_full().bg(rgb(left_col)))
+                        .child(div().flex_1().h_full().bg(rgb(rc)));
+                } else {
+                    bar = bar.child(div().w(px((track_w * frac).max(0.0))).h_full().bg(rgb(left_col)));
+                }
+                key_tile = key_tile.child(bar);
             }
             canvas = canvas.child(key_tile);
         }
@@ -989,19 +1017,54 @@ impl ReaulaGui {
         match mode {
             KeyboardCanvasMode::Calibration => {}
             KeyboardCanvasMode::HotkeyPicker => {
-                if ev.modifiers().shift {
-                    state.draft_rule_modifier = Some(key_index);
-                    if let Some(k) = reaula_core::keymap::by_index(key_index) {
-                        self.status_line = format!(
-                            "Hotkey chord modifier set to {} (slot {})",
-                            k.name, key_index
-                        );
+                if key_index == reaula_core::keymap::idx::FN {
+                    self.status_line =
+                        "Fn (#122) is reserved for Hardware Firmware [FW] Flash — choose another key for Trigger or Daemon Modifier."
+                            .into();
+                } else if ev.modifiers().shift {
+                    if state.draft_category == KeymapCategory::FirmwareFnFlash {
+                        self.status_line =
+                            "Firmware Flash locks modifier to Fn — switch Composer to Daemon Level for custom modifiers.".into();
+                    } else {
+                        state.draft_rule_modifier = Some(key_index);
+                        if let Some(k) = reaula_core::keymap::by_index(key_index) {
+                            self.status_line = format!(
+                                "Daemon chord modifier set to {} (slot {})",
+                                k.name, key_index
+                            );
+                        }
                     }
                 } else {
                     state.draft_rule_key = key_index;
+                    match state.keymap_layer_view {
+                        KeymapLayerView::FirmwareOnly => {
+                            state.set_keymap_draft_category(KeymapCategory::FirmwareFnFlash);
+                        }
+                        KeymapLayerView::DaemonOnly => {
+                            state.set_keymap_draft_category(KeymapCategory::DaemonMemory);
+                        }
+                        KeymapLayerView::Both => {}
+                    }
+                    let fw = state
+                        .keyboard_fn_map
+                        .get(&key_index)
+                        .map(|&hid| format!("FW: Fn+Key -> {}", reaula_core::keymap::usb_hid_name(hid)));
+                    let dm = state
+                        .shortcut_rules
+                        .iter()
+                        .find(|r| r.trigger_key == key_index)
+                        .map(|r| format!("DM: {} ({})", r.gesture_label(), r.action.summary()));
                     if let Some(k) = reaula_core::keymap::by_index(key_index) {
-                        self.status_line =
-                            format!("Hotkey trigger set to {} (slot {})", k.name, key_index);
+                        self.status_line = match (fw, dm) {
+                            (Some(f), Some(d)) => {
+                                format!("Selected {} (#{key_index}) — {f}  |  {d}", k.name)
+                            }
+                            (Some(f), None) => format!("Selected {} (#{key_index}) — {f}", k.name),
+                            (None, Some(d)) => format!("Selected {} (#{key_index}) — {d}", k.name),
+                            (None, None) => {
+                                format!("Selected {} (#{key_index}) — unmapped", k.name)
+                            }
+                        };
                     }
                 }
             }
@@ -1354,21 +1417,254 @@ fn apply_key_selection(state: &mut ConnectedState, key_index: u8, ev: &ClickEven
     state.sync_draft_from_key(key_index);
 }
 
+struct HotkeyKeyVisual {
+    bg: u32,
+    border: u32,
+    top_tag: Option<(&'static str, u32)>,
+    sub_label: String,
+    sub_color: u32,
+    bottom_bar: Option<(u32, Option<u32>, f32)>,
+}
+
+fn hotkey_key_appearance(
+    state: &ConnectedState,
+    filter: KeymapLayerView,
+    key_index: u8,
+    fn_held: bool,
+    aqua_keys: &std::collections::BTreeSet<u8>,
+    aqua_pulsing: &std::collections::BTreeSet<u8>,
+) -> HotkeyKeyVisual {
+    let show_fw = matches!(filter, KeymapLayerView::Both | KeymapLayerView::FirmwareOnly);
+    let show_dm = matches!(filter, KeymapLayerView::Both | KeymapLayerView::DaemonOnly);
+
+    let fw_hid = show_fw
+        .then(|| state.keyboard_fn_map.get(&key_index).copied())
+        .flatten();
+    let dm_active = show_dm
+        .then(|| {
+            state
+                .shortcut_rules
+                .iter()
+                .find(|r| r.enabled && r.trigger_key == key_index)
+        })
+        .flatten();
+    let dm_muted = (show_dm && dm_active.is_none())
+        .then(|| {
+            state
+                .shortcut_rules
+                .iter()
+                .find(|r| !r.enabled && r.trigger_key == key_index)
+        })
+        .flatten();
+    let is_dm_mod = show_dm
+        && state
+            .shortcut_rules
+            .iter()
+            .any(|r| r.enabled && r.modifier_key == Some(key_index));
+
+    let is_aqua = show_dm && aqua_keys.contains(&key_index);
+    let is_aqua_pulse = show_dm && aqua_pulsing.contains(&key_index);
+    let is_fw_glow = fn_held && fw_hid.is_some();
+
+    let is_draft_target = state.draft_rule_key == key_index;
+    let is_draft_mod = match state.draft_category {
+        KeymapCategory::FirmwareFnFlash => key_index == reaula_core::keymap::idx::FN,
+        KeymapCategory::DaemonMemory => state.draft_rule_modifier == Some(key_index),
+    };
+    let top_tag = if is_draft_target {
+        Some((
+            "TRG",
+            if state.draft_category == KeymapCategory::FirmwareFnFlash {
+                theme::FW_AMBER_INK
+            } else {
+                theme::DM_AQUA_INK
+            },
+        ))
+    } else if is_draft_mod {
+        Some(("MOD", theme::INK_ACCENT))
+    } else {
+        None
+    };
+
+    let (bg, base_border, sub_label, sub_color, bottom_bar) = if is_aqua_pulse {
+        let bar = if fw_hid.is_some() {
+            (theme::FW_AMBER_BORDER, Some(theme::DM_AQUA_PULSE_BORDER), 1.0)
+        } else {
+            (theme::DM_AQUA_PULSE_BORDER, None, 1.0)
+        };
+        (
+            theme::DM_AQUA_PULSE,
+            theme::DM_AQUA_PULSE_BORDER,
+            if fw_hid.is_some() {
+                "FW+LIVE".into()
+            } else {
+                "DM:LIVE".into()
+            },
+            theme::DM_AQUA_PULSE_INK,
+            Some(bar),
+        )
+    } else if is_aqua {
+        let bar = if fw_hid.is_some() {
+            (theme::FW_AMBER_BORDER, Some(theme::DM_AQUA_BORDER), 1.0)
+        } else {
+            (theme::DM_AQUA_BORDER, None, 1.0)
+        };
+        (
+            theme::DM_AQUA_ACTIVE,
+            theme::DM_AQUA_BORDER,
+            if fw_hid.is_some() {
+                "FW+ACTV".into()
+            } else {
+                "DM:ACTV".into()
+            },
+            theme::DM_AQUA_INK,
+            Some(bar),
+        )
+    } else if fw_hid.is_some() && dm_active.is_some() {
+        (
+            theme::OVERLAP_BG,
+            theme::OVERLAP_BORDER,
+            "FW+DM".into(),
+            theme::OVERLAP_INK,
+            Some((theme::FW_AMBER_BORDER, Some(theme::DM_AQUA_BORDER), 1.0)),
+        )
+    } else if let Some(hid) = fw_hid {
+        (
+            if is_fw_glow {
+                theme::FW_AMBER_GLOW
+            } else {
+                theme::FW_AMBER_BG
+            },
+            theme::FW_AMBER_BORDER,
+            short_kb_fn_badge(hid),
+            theme::FW_AMBER_INK,
+            Some((theme::FW_AMBER_BORDER, None, 1.0)),
+        )
+    } else if let Some(rule) = dm_active {
+        let paused = !state.shortcut_watcher_active;
+        (
+            theme::DM_AQUA_BG,
+            if paused {
+                theme::DM_AQUA_DIM_BORDER
+            } else {
+                theme::DM_AQUA_BORDER
+            },
+            short_daemon_rule_badge(rule),
+            if paused {
+                0x67E8F9
+            } else {
+                theme::DM_AQUA_INK
+            },
+            Some((
+                if paused {
+                    theme::DM_AQUA_DIM_BORDER
+                } else {
+                    theme::DM_AQUA_BORDER
+                },
+                None,
+                1.0,
+            )),
+        )
+    } else if dm_muted.is_some() {
+        (
+            0x0F2030,
+            0x1E4E5F,
+            "DM:Off".into(),
+            0x6794A7,
+            Some((0x1E4E5F, None, 1.0)),
+        )
+    } else if is_dm_mod {
+        (
+            0x0A253B,
+            0x0284C7,
+            "DM:Mod".into(),
+            0x7DD3FC,
+            Some((0x0284C7, None, 1.0)),
+        )
+    } else {
+        (
+            if is_draft_target || is_draft_mod {
+                theme::SHADE_REGAL
+            } else {
+                theme::SHADE_BASE
+            },
+            if is_draft_mod {
+                theme::BORDER_REGAL
+            } else {
+                theme::BORDER_SUBTLE
+            },
+            format!("#{}", key_index),
+            theme::INK_MUTED,
+            None,
+        )
+    };
+
+    let border = if is_draft_target && !is_aqua && !is_aqua_pulse {
+        theme::BORDER_FOCUS
+    } else {
+        base_border
+    };
+
+    HotkeyKeyVisual {
+        bg,
+        border,
+        top_tag,
+        sub_label,
+        sub_color,
+        bottom_bar,
+    }
+}
+
+fn short_daemon_rule_badge(rule: &ShortcutRule) -> String {
+    match &rule.action {
+        ShortcutAction::EmitKey { key } => {
+            let short = match key {
+                VirtualKey::Up => "Up",
+                VirtualKey::Down => "Dn",
+                VirtualKey::Left => "Lt",
+                VirtualKey::Right => "Rt",
+                VirtualKey::Home => "Hm",
+                VirtualKey::End => "Ed",
+                VirtualKey::PageUp => "PU",
+                VirtualKey::PageDown => "PD",
+                VirtualKey::Insert => "In",
+                VirtualKey::Delete => "Dl",
+                VirtualKey::Escape => "Es",
+                VirtualKey::Grave => "`",
+                VirtualKey::PrintScreen => "Pr",
+                VirtualKey::Mute => "Mt",
+                VirtualKey::VolumeDown => "V-",
+                VirtualKey::VolumeUp => "V+",
+                VirtualKey::PlayPause => "Pl",
+                VirtualKey::NextSong => "Nx",
+                VirtualKey::PreviousSong => "Pv",
+                _ => key.label(),
+            };
+            format!("DM:{short}")
+        }
+        ShortcutAction::ActuationPreset { .. } => "DM:Act".into(),
+        ShortcutAction::ToggleSocd => "DM:Scd".into(),
+        ShortcutAction::LightingPreset { .. } | ShortcutAction::ToggleLighting => "DM:RGB".into(),
+        ShortcutAction::SetPollRate { khz } => format!("DM:{khz}k"),
+        ShortcutAction::RunCommand { .. } => "DM:Cmd".into(),
+    }
+}
+
 fn short_kb_fn_badge(hid: u8) -> String {
     match hid {
-        0x52 => "KB:Up".into(),
-        0x51 => "KB:Dn".into(),
-        0x50 => "KB:Lt".into(),
-        0x4F => "KB:Rt".into(),
-        0x49 => "KB:Ins".into(),
-        0x4A => "KB:Hom".into(),
-        0x4B => "KB:PgU".into(),
-        0x4C => "KB:Del".into(),
-        0x4D => "KB:End".into(),
-        0x4E => "KB:PgD".into(),
-        0x29 => "KB:Esc".into(),
-        0x35 => "KB:`".into(),
-        0x46 => "KB:Prt".into(),
+        0x52 => "FW:Up".into(),
+        0x51 => "FW:Dn".into(),
+        0x50 => "FW:Lt".into(),
+        0x4F => "FW:Rt".into(),
+        0x49 => "FW:Ins".into(),
+        0x4A => "FW:Hom".into(),
+        0x4B => "FW:PgU".into(),
+        0x4C => "FW:Del".into(),
+        0x4D => "FW:End".into(),
+        0x4E => "FW:PgD".into(),
+        0x29 => "FW:Esc".into(),
+        0x35 => "FW:`".into(),
+        0x46 => "FW:Prt".into(),
         _ => {
             let label = reaula_core::keymap::usb_hid_name(hid);
             let compact: String = label
@@ -1376,7 +1672,45 @@ fn short_kb_fn_badge(hid: u8) -> String {
                 .filter(|c| !c.is_whitespace())
                 .take(4)
                 .collect();
-            format!("KB:{compact}")
+            format!("FW:{compact}")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn firmware_and_daemon_badges_use_distinct_prefixes_and_action_tags() {
+        assert_eq!(short_kb_fn_badge(0x52), "FW:Up");
+        assert_eq!(short_kb_fn_badge(0x4C), "FW:Del");
+
+        let dm_key = ShortcutRule {
+            id: 1,
+            name: "Up".into(),
+            enabled: true,
+            modifier_key: Some(reaula_core::keymap::idx::FN),
+            trigger_key: reaula_core::keymap::idx::R,
+            trigger_depth_mm: 1.5,
+            action: ShortcutAction::EmitKey {
+                key: VirtualKey::Up,
+            },
+        };
+        let dm_cmd = ShortcutRule {
+            id: 2,
+            name: "Shell".into(),
+            enabled: true,
+            modifier_key: None,
+            trigger_key: reaula_core::keymap::idx::T,
+            trigger_depth_mm: 1.5,
+            action: ShortcutAction::RunCommand {
+                command: "echo ok".into(),
+            },
+        };
+        assert_eq!(short_daemon_rule_badge(&dm_key), "DM:Up");
+        assert_eq!(short_daemon_rule_badge(&dm_cmd), "DM:Cmd");
+        assert_eq!(action_kind_tag(&dm_key.action), "uinput Key");
+        assert_eq!(action_kind_tag(&dm_cmd.action), "Shell Cmd");
     }
 }

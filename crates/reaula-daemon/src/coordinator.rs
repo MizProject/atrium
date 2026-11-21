@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
@@ -23,6 +23,41 @@ use reaula_core::protocol::{
 use crate::audio::DaemonAudioEngine;
 use crate::keyboards::{self as driver_index, AulaDriver};
 use crate::shortcuts::{ShortcutEngine, spawn_user_command};
+
+pub(crate) struct DaemonRuntimeHealth {
+    started_at: Instant,
+    hw_heartbeat_ms: AtomicU64,
+    device_connected: AtomicBool,
+    pub(crate) systemd_managed: bool,
+}
+
+impl DaemonRuntimeHealth {
+    pub(crate) fn new(systemd_managed: bool) -> Self {
+        Self {
+            started_at: Instant::now(),
+            hw_heartbeat_ms: AtomicU64::new(0),
+            device_connected: AtomicBool::new(false),
+            systemd_managed,
+        }
+    }
+
+    pub(crate) fn record_heartbeat(&self, device_connected: bool) {
+        let elapsed_ms = self.started_at.elapsed().as_millis() as u64;
+        self.hw_heartbeat_ms.store(elapsed_ms, Ordering::Relaxed);
+        self.device_connected
+            .store(device_connected, Ordering::Relaxed);
+    }
+
+    pub(crate) fn heartbeat_age(&self) -> Duration {
+        let now_ms = self.started_at.elapsed().as_millis() as u64;
+        let last_ms = self.hw_heartbeat_ms.load(Ordering::Relaxed);
+        Duration::from_millis(now_ms.saturating_sub(last_ms))
+    }
+
+    pub(crate) fn is_device_connected(&self) -> bool {
+        self.device_connected.load(Ordering::Relaxed)
+    }
+}
 
 pub(crate) type TravelSubscribeReply = Result<(f64, Receiver<(LiveTravelSample, f64)>), String>;
 pub(crate) type CalibrationSubReply = Result<Receiver<CalibrationProgress>, String>;
@@ -279,6 +314,18 @@ impl HardwareState {
             let _ = drv.stop_calibration(cal.any_key);
         }
     }
+
+    fn cleanup_on_exit(&mut self) {
+        self.indicator.restore(self.driver.as_deref_mut());
+        self.audio.stop(true, self.driver.as_deref_mut());
+        self.shortcuts.release_all_virtual_keys();
+        self.stop_active_calibration();
+        if self.travel_active
+            && let Some(drv) = self.driver.as_mut()
+        {
+            let _ = drv.close_trigger_test();
+        }
+    }
 }
 
 pub(crate) fn hardware_loop(
@@ -288,10 +335,13 @@ pub(crate) fn hardware_loop(
     socket_path: String,
     shortcuts_path: Option<PathBuf>,
     preferred_keyboard: Option<String>,
+    health: Arc<DaemonRuntimeHealth>,
 ) {
     let mut state = HardwareState::new(shortcuts_path, preferred_keyboard, allowed_uids.clone());
+    health.record_heartbeat(state.driver.is_some());
 
     while !shutdown.load(Ordering::Relaxed) {
+        health.record_heartbeat(state.driver.is_some());
         let streaming = state.travel_active || state.calibration.is_some();
         let msg = if streaming {
             match rx.try_recv() {
@@ -321,22 +371,22 @@ pub(crate) fn hardware_loop(
                 &shutdown,
                 &allowed_uids,
                 &socket_path,
+                &health,
             );
             if should_quit {
                 break;
             }
             // Drain burst RPCs immediately before polling HID streams.
             while let Ok(next) = rx.try_recv() {
-                if handle_coord_msg(next, &mut state, &shutdown, &allowed_uids, &socket_path) {
-                    state.indicator.restore(state.driver.as_deref_mut());
-                    state.audio.stop(true, state.driver.as_deref_mut());
-                    state.shortcuts.release_all_virtual_keys();
-                    state.stop_active_calibration();
-                    if state.travel_active
-                        && let Some(drv) = state.driver.as_mut()
-                    {
-                        let _ = drv.close_trigger_test();
-                    }
+                if handle_coord_msg(
+                    next,
+                    &mut state,
+                    &shutdown,
+                    &allowed_uids,
+                    &socket_path,
+                    &health,
+                ) {
+                    state.cleanup_on_exit();
                     return;
                 }
             }
@@ -426,15 +476,7 @@ pub(crate) fn hardware_loop(
         }
     }
 
-    state.indicator.restore(state.driver.as_deref_mut());
-    state.audio.stop(true, state.driver.as_deref_mut());
-    state.shortcuts.release_all_virtual_keys();
-    state.stop_active_calibration();
-    if state.travel_active
-        && let Some(drv) = state.driver.as_mut()
-    {
-        let _ = drv.close_trigger_test();
-    }
+    state.cleanup_on_exit();
 }
 
 fn handle_coord_msg(
@@ -443,6 +485,7 @@ fn handle_coord_msg(
     shutdown: &Arc<AtomicBool>,
     allowed_uids: &[u32],
     socket_path: &str,
+    health: &Arc<DaemonRuntimeHealth>,
 ) -> bool {
     match msg {
         CoordinatorMsg::RequestShutdown => {
@@ -560,6 +603,7 @@ fn handle_coord_msg(
                         .map(|d| d.spec().display_name.to_string()),
                     socket_path: socket_path.to_string(),
                     travel_subscribers: state.subscribers.len(),
+                    systemd_managed: health.systemd_managed,
                 });
                 let _ = reply_tx.send(resp);
                 return false;
@@ -583,10 +627,14 @@ fn handle_coord_msg(
                     rules,
                     watcher_active,
                 } => {
-                    state.shortcuts.ensure_uinput();
-                    state.shortcuts.set_rules(rules, watcher_active);
-                    state.sync_travel_stream();
-                    state.shortcuts.snapshot_response()
+                    if let Err(message) = crate::shortcuts::validate_daemon_rules(&rules) {
+                        DaemonResponse::Error { message }
+                    } else {
+                        state.shortcuts.ensure_uinput();
+                        state.shortcuts.set_rules(rules, watcher_active);
+                        state.sync_travel_stream();
+                        state.shortcuts.snapshot_response()
+                    }
                 }
                 DaemonRequest::TriggerShortcut { id } => {
                     if let Some(rule) = state

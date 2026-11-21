@@ -10,14 +10,16 @@
 //!    against an explicit allowlist before reading any message bytes.
 //! 5. Clients also check `SO_PEERCRED` on the daemon peer (`uid == 0` or `uid == self`).
 
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::fs::{self, Permissions};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -79,6 +81,8 @@ pub struct DaemonStatus {
     pub keyboard_name: Option<String>,
     pub socket_path: String,
     pub travel_subscribers: usize,
+    #[serde(default)]
+    pub systemd_managed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -660,8 +664,19 @@ pub fn current_gid() -> u32 {
     unsafe { libc::getegid() }
 }
 
-/// Look up primary GID and home directory for a UID from `/etc/passwd` (via `getpwuid_r`).
-pub fn user_passwd_for_uid(uid: u32) -> Option<(u32, PathBuf)> {
+/// Full `/etc/passwd` + supplementary group record for safely dropping root privileges.
+#[derive(Debug, Clone)]
+pub struct UserPasswdRecord {
+    pub uid: u32,
+    pub gid: u32,
+    pub username: String,
+    pub home_dir: PathBuf,
+    pub shell: String,
+    pub groups: Vec<u32>,
+}
+
+/// Look up username, primary GID, home dir, login shell, and non-root supplementary groups via `getpwuid_r` + `getgrouplist`.
+pub fn user_account_for_uid(uid: u32) -> Option<UserPasswdRecord> {
     let mut pwd = std::mem::MaybeUninit::<libc::passwd>::uninit();
     let mut buf = vec![0u8; 4096];
     let mut result: *mut libc::passwd = std::ptr::null_mut();
@@ -675,19 +690,126 @@ pub fn user_passwd_for_uid(uid: u32) -> Option<(u32, PathBuf)> {
             &mut result,
         )
     };
-    if rc == 0 && !result.is_null() {
-        // SAFETY: `getpwuid_r` initialized `pwd` when returning 0 and non-null `result`.
-        let p = unsafe { pwd.assume_init() };
-        let home = if p.pw_dir.is_null() {
-            PathBuf::new()
-        } else {
-            // SAFETY: `pw_dir` is a valid NUL-terminated string inside `buf`.
-            PathBuf::from(unsafe { CStr::from_ptr(p.pw_dir) }.to_string_lossy().as_ref())
-        };
-        Some((p.pw_gid, home))
-    } else {
-        None
+    if rc != 0 || result.is_null() {
+        return None;
     }
+
+    // SAFETY: `getpwuid_r` initialized `pwd` when returning 0 and non-null `result`.
+    let p = unsafe { pwd.assume_init() };
+    let cstr_to_string = |ptr: *const libc::c_char| -> String {
+        if ptr.is_null() {
+            String::new()
+        } else {
+            // SAFETY: pointer is a valid NUL-terminated string inside `buf`.
+            unsafe { CStr::from_ptr(ptr) }
+                .to_string_lossy()
+                .into_owned()
+        }
+    };
+    let username = cstr_to_string(p.pw_name);
+    let home_dir = PathBuf::from(cstr_to_string(p.pw_dir));
+    let shell = {
+        let s = cstr_to_string(p.pw_shell);
+        if s.is_empty() { "/bin/sh".into() } else { s }
+    };
+
+    let mut groups: Vec<u32> = Vec::new();
+    if let Ok(c_user) = CString::new(username.as_bytes()) {
+        let mut ngroups: libc::c_int = 32;
+        let mut raw_gids: Vec<libc::gid_t> = vec![0; ngroups as usize];
+        // SAFETY: valid C string and writable buffer sized by `ngroups`.
+        let g_rc = unsafe {
+            libc::getgrouplist(c_user.as_ptr(), p.pw_gid, raw_gids.as_mut_ptr(), &mut ngroups)
+        };
+        if g_rc < 0 && ngroups > 0 && ngroups <= 1024 {
+            raw_gids.resize(ngroups as usize, 0);
+            // SAFETY: resized buffer matches `ngroups` returned by first call.
+            let _ = unsafe {
+                libc::getgrouplist(c_user.as_ptr(), p.pw_gid, raw_gids.as_mut_ptr(), &mut ngroups)
+            };
+        }
+        let count = (ngroups.max(0) as usize).min(raw_gids.len());
+        groups.extend(raw_gids[..count].iter().copied());
+    }
+    if uid != 0 {
+        groups.retain(|&g| g != 0);
+        if groups.is_empty() && p.pw_gid != 0 {
+            groups.push(p.pw_gid);
+        }
+    } else if groups.is_empty() {
+        groups.push(p.pw_gid);
+    }
+
+    Some(UserPasswdRecord {
+        uid,
+        gid: p.pw_gid,
+        username,
+        home_dir,
+        shell,
+        groups,
+    })
+}
+
+/// Look up primary GID and home directory for a UID from `/etc/passwd` (via `getpwuid_r`).
+pub fn user_passwd_for_uid(uid: u32) -> Option<(u32, PathBuf)> {
+    user_account_for_uid(uid).map(|r| (r.gid, r.home_dir))
+}
+
+/// Drop supplementary groups, GID, and UID before `exec` when running as root (`setgroups -> setgid -> setuid`).
+///
+/// Always performs `setgroups` before `setuid` inside a single `pre_exec` hook so the child never
+/// retains root (`gid=0`) or other root supplementary groups.
+pub fn configure_user_command_credentials(
+    cmd: &mut Command,
+    user: &UserPasswdRecord,
+    new_session: bool,
+) -> Result<(), String> {
+    let dropping_from_root = current_uid() == 0;
+    if dropping_from_root && (user.uid == 0 || user.gid == 0) {
+        return Err("refusing to spawn unprivileged child targeting UID/GID 0".into());
+    }
+    let target_uid: libc::uid_t = user.uid;
+    let target_gid: libc::gid_t = user.gid;
+    let mut gids: Vec<libc::gid_t> = user
+        .groups
+        .iter()
+        .copied()
+        .filter(|&g| !dropping_from_root || g != 0)
+        .collect();
+    if gids.is_empty() {
+        gids.push(target_gid);
+    }
+
+    // SAFETY: `pre_exec` closure executes only async-signal-safe syscalls (`setsid`, `umask`,
+    // `setgroups`, `setgid`, `setuid`, `get*`) on pre-allocated primitive values.
+    unsafe {
+        cmd.pre_exec(move || {
+            if new_session && libc::setsid() == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            libc::umask(0o022);
+            if dropping_from_root {
+                if libc::setgroups(gids.len(), gids.as_ptr()) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                if libc::setgid(target_gid) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                if libc::setuid(target_uid) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                if libc::getuid() != target_uid
+                    || libc::geteuid() != target_uid
+                    || libc::getgid() != target_gid
+                    || libc::getegid() != target_gid
+                {
+                    return Err(io::Error::from_raw_os_error(libc::EPERM));
+                }
+            }
+            Ok(())
+        });
+    }
+    Ok(())
 }
 
 /// Look up primary GID for a UID from `/etc/passwd` (via `getpwuid_r`), if present.
@@ -1520,9 +1642,9 @@ mod tests {
     fn shortcut_rule_and_calibration_roundtrip() {
         let rule = ShortcutRule {
             id: 1,
-            name: "Fn+T -> Up".into(),
+            name: "Caps+T -> Up".into(),
             enabled: true,
-            modifier_key: Some(crate::keymap::idx::FN),
+            modifier_key: Some(crate::keymap::idx::CAPS),
             trigger_key: crate::keymap::idx::T,
             trigger_depth_mm: 1.6,
             action: ShortcutAction::EmitKey {
@@ -1544,9 +1666,9 @@ mod tests {
             } => {
                 assert!(watcher_active);
                 assert_eq!(rules.len(), 1);
-                assert_eq!(rules[0].modifier_key, Some(crate::keymap::idx::FN));
+                assert_eq!(rules[0].modifier_key, Some(crate::keymap::idx::CAPS));
                 assert_eq!(rules[0].trigger_key, crate::keymap::idx::T);
-                assert_eq!(rules[0].gesture_label(), "Fn + T");
+                assert_eq!(rules[0].gesture_label(), "Caps + T");
                 assert!(rules[0].action.summary().contains("Arrow Up"));
             }
             other => panic!("unexpected req: {other:?}"),
@@ -1570,6 +1692,11 @@ mod tests {
         let mut acur = Cursor::new(abuf);
         let adecoded: DaemonRequest = read_json_line(&mut acur).unwrap();
         assert!(matches!(adecoded, DaemonRequest::StartAudioSync { .. }));
+
+        let acct = user_account_for_uid(current_uid()).expect("passwd record for current uid");
+        assert_eq!(acct.uid, current_uid());
+        assert!(!acct.username.is_empty());
+        assert!(!acct.groups.is_empty());
     }
 }
 

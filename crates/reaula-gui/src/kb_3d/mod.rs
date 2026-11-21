@@ -1713,11 +1713,16 @@ mod tests {
             ..scene
         });
         let w_slot = WIN60HE_KEYS.iter().position(|k| k.index == 46).unwrap();
-        let enter_slot = WIN60HE_KEYS.iter().position(|k| k.index == 79).unwrap();
+        let e_slot = WIN60HE_KEYS.iter().position(|k| k.name == "E").unwrap();
+        let enter_slot = WIN60HE_KEYS.iter().position(|k| k.name == "Enter").unwrap();
         assert!(ripple_aged[w_slot][0] < 0.01, "Ripple should fade by 1.8s");
         assert!(
             fw_aged[w_slot][0] > 0.12,
             "Fireworks should still glow locally at 1.8s"
+        );
+        assert!(
+            fw_aged[e_slot][0] > 0.02,
+            "Fireworks should illuminate adjacent area around pressed key"
         );
         assert!(
             fw_aged[enter_slot][0] < 0.02,

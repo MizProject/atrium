@@ -1,0 +1,24 @@
+[Unit]
+Description=Reaula Hardware Driver Daemon for %i
+Documentation=https://github.com/MizProject/reaula
+After=local-fs.target systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/local/bin/reaulad --allow-user %i --socket /run/reaula/reaulad.sock
+RuntimeDirectory=reaula
+RuntimeDirectoryMode=0700
+StateDirectory=reaula
+StateDirectoryMode=0700
+Restart=on-failure
+RestartSec=2s
+WatchdogSec=30s
+TimeoutStopSec=10s
+KillMode=mixed
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

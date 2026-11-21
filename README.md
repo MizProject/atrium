@@ -10,10 +10,19 @@ Userspace Linux driver suite in Rust for indexed **Aula** Hall-effect keyboards 
 - **`crates/reaula-tui` (`reaula-tui`)**: Interactive `ratatui` terminal dashboard for keymap travel, actuation/switches, lighting + live Audio EQ controls, and SOCD/security inspection.
 - **`crates/reaula-gui` (`reaula-gui`)**: Native GPUI + `wgpu` desktop suite featuring:
   - **Main**: 61-key actuation & Rapid Trigger (`Fixed` / `RT` / `Split`), magnetic switch profiles (`HM1`, `HH1`, `CY1`, `TC1`), top/bottom deadbands, PRCS/SOCD pairs, USB polling rate (`1/2/4/8 kHz`), Win-Lock, and live travel monitor.
+  - **Guide**: Interactive WIN 60 HE hardware reference & dual-layer keymapping documentation.
   - **Calibration**: Guarded all-key and any-key Hall-effect sensor calibration.
   - **Color & Light**: Interactive `wgpu` 3D WIN 60 HE studio (beveled caps, braided rear-left Type-C cable, drag-orbit & camera presets) + 2D top-down view, per-key Custom RGB slots (`cmd 0x09`), and daemon-hosted **Audio Sync** reactive RGB (persists after closing the GUI).
-  - **Hotkeys**: In-memory daemon Hall-effect chord shortcuts (`evdev`/`uinput` with key-leak guard) and onboard keyboard `cmd 0x18` Fn-layer overrides.
+  - **Keymaps**: Dual-layer keymap studio combining onboard firmware `cmd 0x18` Fn-layer flash overrides with in-memory daemon Hall-effect chord shortcuts (`evdev`/`uinput` with key-leak guard).
   - **Diagnostics**: 4-layer fault isolation (`Kernel`, `Daemon`, `Keyboard`, `Software`), 5x HID echo RTT benchmark, all-61 keycap live/peak depth verification map with `0.00 mm` return checks, and an interactive **Hall-effect switch mechanism cutaway** (`wgpu` 3D + `2D` schematic fallback).
+
+## Desktop GUI (`reaula-gui`) Screenshots
+
+| Main — Hardware Identity, Actuation & Live Travel | Color & Light — 3D `wgpu` Studio & RGB Configurator |
+| :---: | :---: |
+| ![Main View](screenshots/main.png) | ![Color & Light View](screenshots/color_and_light.png) |
+| **Calibration — Guarded Hall-Effect Sensor Sampling** | **Diagnostics — 4-Layer Fault Isolation & 3D Switch Cutaway** |
+| ![Calibration View](screenshots/calibration.png) | ![Diagnostics View](screenshots/diagnostics.png) |
 
 ## Quick Start
 
@@ -21,6 +30,8 @@ Build all binaries and run the test suite:
 
 ```bash
 cargo build --workspace --bins
+# or run the full lint + test + release packaging pipeline:
+python3 reaula_build.py all
 ```
 
 Start the background daemon (creates a `0700`/`0600` socket authenticated with kernel `SO_PEERCRED`):
@@ -28,6 +39,19 @@ Start the background daemon (creates a `0700`/`0600` socket authenticated with k
 ```bash
 cargo run -- daemon start
 cargo run -- daemon status
+```
+
+Alternatively, initialize and manage `reaulad` smoothly as a `systemd` `Type=notify` service (with watchdog & socket activation support via unit templates in `systemd/`):
+
+```bash
+# Install and start system template unit (reaulad@<user>.service):
+cargo run -- daemon systemd install --enable --start
+cargo run -- daemon status --systemd
+cargo run -- daemon stop --systemd
+
+# Or use a user-session service (with udev rules installed):
+cargo run -- daemon systemd install --user --enable --start
+cargo run -- daemon restart --systemd --user
 ```
 
 Run any frontend without `sudo` while `reaulad` is active:

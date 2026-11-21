@@ -6,7 +6,6 @@
 //! frames into this engine over an anonymous pipe.
 
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -457,20 +456,23 @@ impl DaemonAudioInput {
             AudioSyncSource::Demo => unreachable!(),
         }
 
-        let (target_gid, home_dir) = ipc::user_passwd_for_uid(target_uid)
-            .unwrap_or_else(|| (target_uid, std::path::PathBuf::new()));
+        let user = ipc::user_account_for_uid(target_uid).ok_or_else(|| {
+            format!("no local /etc/passwd account found for authorized UID {target_uid}")
+        })?;
         let runtime_dir = format!("/run/user/{target_uid}");
         cmd.env("XDG_RUNTIME_DIR", &runtime_dir);
         cmd.env("PULSE_RUNTIME_PATH", format!("{runtime_dir}/pulse"));
-        if !home_dir.as_os_str().is_empty() {
-            cmd.env("HOME", &home_dir);
+        if !user.home_dir.as_os_str().is_empty() {
+            cmd.env("HOME", &user.home_dir);
         }
+        cmd.env("USER", &user.username);
+        cmd.env("LOGNAME", &user.username);
         cmd.stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        crate::systemd::scrub_child_env(&mut cmd);
 
-        // SAFETY: `pre_exec` only calls async-signal-safe `setgid`/`setuid` via CommandExt.
-        cmd.uid(target_uid).gid(target_gid);
+        ipc::configure_user_command_credentials(&mut cmd, &user, false)?;
 
         let mut child = cmd
             .spawn()

@@ -1,0 +1,297 @@
+name: Build & Release reaula
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "*"
+      - "!ci-*"
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - "**.md"
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "Cargo build profile"
+        required: false
+        type: choice
+        default: "release"
+        options:
+          - release
+          - debug
+      run_clippy:
+        description: "Run strict workspace Clippy checks (-D warnings)"
+        required: false
+        type: boolean
+        default: true
+      run_tests:
+        description: "Run workspace unit & offscreen GPU tests"
+        required: false
+        type: boolean
+        default: true
+      fmt_check:
+        description: "Enforce cargo fmt --all -- --check"
+        required: false
+        type: boolean
+        default: false
+      strip_binaries:
+        description: "Strip debug symbols from packaged release binaries"
+        required: false
+        type: boolean
+        default: true
+      clean_cache:
+        description: "Skip restoring cached Cargo registry and target directory"
+        required: false
+        type: boolean
+        default: false
+      publish_release:
+        description: "Publish GitHub Release (auto skips on PR or missing TOKEN_KEYS)"
+        required: false
+        type: choice
+        default: "auto"
+        options:
+          - auto
+          - "true"
+          - "false"
+      prerelease:
+        description: "Mark release as prerelease (auto marks branch/dispatch & pre-tags)"
+        required: false
+        type: choice
+        default: "auto"
+        options:
+          - auto
+          - "true"
+          - "false"
+      release_tag:
+        description: "Optional custom GitHub Release tag (auto-generated if empty)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  meta:
+    name: "Resolve Metadata"
+    runs-on: ubuntu-26.04
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      build_number: ${{ steps.resolve.outputs.build_number }}
+      dynamic_version: ${{ steps.resolve.outputs.dynamic_version }}
+      short_sha: ${{ steps.resolve.outputs.short_sha }}
+      arch: ${{ steps.resolve.outputs.arch }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      release_name: ${{ steps.resolve.outputs.release_name }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+      should_release: ${{ steps.resolve.outputs.should_release }}
+      has_token_keys: ${{ steps.resolve.outputs.has_token_keys }}
+      env_keys_present: ${{ steps.resolve.outputs.env_keys_present }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve metadata & verify env keys
+        id: resolve
+        env:
+          TOKEN_KEYS: ${{ secrets.TOKEN_KEYS }}
+          INPUT_PUBLISH_RELEASE: ${{ inputs.publish_release || 'auto' }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease || 'auto' }}
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          args=(
+            metadata
+            --check-env-key TOKEN_KEYS
+            --publish-release "$INPUT_PUBLISH_RELEASE"
+            --prerelease "$INPUT_PRERELEASE"
+            --github-output "$GITHUB_OUTPUT"
+            --step-summary "$GITHUB_STEP_SUMMARY"
+          )
+          if [ -n "$INPUT_RELEASE_TAG" ]; then
+            args+=(--release-tag "$INPUT_RELEASE_TAG")
+          fi
+          python3 reaula_build.py "${args[@]}"
+
+  build:
+    name: "Build, Lint & Test (Ubuntu 26.04)"
+    needs: [meta]
+    runs-on: ubuntu-26.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install Linux & desktop GUI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            binutils \
+            build-essential \
+            curl \
+            git \
+            libasound2-dev \
+            libfontconfig1-dev \
+            libfreetype-dev \
+            libhidapi-dev \
+            libssl-dev \
+            libudev-dev \
+            libusb-1.0-0-dev \
+            libvulkan-dev \
+            libwayland-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxcb-xkb-dev \
+            libxcb1-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            pkg-config \
+            python3 \
+            tar
+
+      - name: Setup Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Cargo registry, index & build target
+        if: ${{ inputs.clean_cache != true }}
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ inputs.profile || 'release' }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ inputs.profile || 'release' }}-
+            ${{ runner.os }}-cargo-
+
+      - name: Verify build environment
+        run: python3 reaula_build.py check --step-summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Compile, test & package workspace
+        env:
+          INPUT_PROFILE: ${{ inputs.profile || 'release' }}
+          INPUT_CLIPPY: ${{ inputs.run_clippy != false && 'true' || 'false' }}
+          INPUT_TESTS: ${{ inputs.run_tests != false && 'true' || 'false' }}
+          INPUT_FMT: ${{ inputs.fmt_check == true && 'true' || 'false' }}
+          INPUT_STRIP: ${{ inputs.strip_binaries != false && 'true' || 'false' }}
+          RELEASE_TAG: ${{ needs.meta.outputs.release_tag }}
+        run: |
+          args=(
+            build
+            --locked
+            --profile "$INPUT_PROFILE"
+            --release-tag "$RELEASE_TAG"
+            --dist-dir "${{ runner.temp }}/dist"
+            --release-dir "${{ runner.temp }}/release"
+            --step-summary "$GITHUB_STEP_SUMMARY"
+          )
+          if [ "$INPUT_CLIPPY" != "true" ]; then
+            args+=(--skip-clippy)
+          fi
+          if [ "$INPUT_TESTS" != "true" ]; then
+            args+=(--skip-tests)
+          fi
+          if [ "$INPUT_FMT" = "true" ]; then
+            args+=(--fmt-check)
+          fi
+          if [ "$INPUT_STRIP" != "true" ]; then
+            args+=(--no-strip)
+          fi
+          python3 reaula_build.py "${args[@]}"
+
+      - name: Refresh release SHA-256 checksums
+        run: python3 reaula_build.py checksums --release-dir "${{ runner.temp }}/release"
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/release/*
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload dist & build report artifact
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: reaula-dist-${{ needs.meta.outputs.build_number }}-${{ needs.meta.outputs.short_sha }}
+          path: ${{ runner.temp }}/dist/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  release:
+    name: "Report & Publish Release"
+    needs: [meta, build]
+    if: ${{ !cancelled() && needs.meta.result == 'success' && needs.build.result == 'success' && needs.meta.outputs.should_release == 'true' }}
+    runs-on: ubuntu-26.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download release assets
+        uses: actions/download-artifact@v7
+        with:
+          name: release-assets
+          path: release_assets
+
+      - name: Download build report metadata
+        uses: actions/download-artifact@v7
+        with:
+          name: reaula-dist-${{ needs.meta.outputs.build_number }}-${{ needs.meta.outputs.short_sha }}
+          path: dist_meta
+
+      - name: Validate release assets & checksums
+        run: |
+          ls -lh release_assets/
+          COUNT=$(find release_assets -maxdepth 1 -type f | wc -l)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::No release assets found to publish."
+            exit 1
+          fi
+          (cd release_assets && sha256sum -c SHA256SUMS.txt)
+
+      - name: Generate release report & notes
+        run: |
+          python3 reaula_build.py report \
+            --release-dir release_assets \
+            --report-json dist_meta/build-report.json \
+            --release-tag "${{ needs.meta.outputs.release_tag }}" \
+            --prerelease "${{ needs.meta.outputs.prerelease }}" \
+            --build-number "${{ needs.meta.outputs.build_number }}" \
+            --output release_body.md \
+            --step-summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          token: ${{ secrets.TOKEN_KEYS }}
+          tag_name: ${{ needs.meta.outputs.release_tag }}
+          name: ${{ needs.meta.outputs.release_name }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ needs.meta.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.meta.outputs.prerelease == 'true' && 'false' || 'true' }}
+          body_path: release_body.md
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          files: |
+            release_assets/*

@@ -1,9 +1,9 @@
 //! Sidebar page renderers for `reaula-gui`.
 
 use gpui::{
-    BorderStyle, ClipboardItem, Context, Div, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, Pixels, ScrollDelta, ScrollWheelEvent, Stateful, Window, bounds, canvas, div,
-    fill, img, outline, point, prelude::*, px, rgb, rgba, size,
+    BorderStyle, ClipboardItem, Context, Div, ElementInputHandler, KeyDownEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, Pixels, ScrollDelta, ScrollWheelEvent, Stateful, Window,
+    bounds, canvas, div, fill, img, outline, point, prelude::*, px, rgb, rgba, size,
 };
 
 use reaula_core::audio_fx::{AudioEffectStyle, AudioPalette, NUM_BANDS};
@@ -19,15 +19,16 @@ use crate::kb_3d::{
 };
 use crate::state::{
     AUDIO_DISCLAIMER_COOLDOWN_SECS, ArrowClusterPreset, AudioSourceOption, ConnectedState,
-    DropdownId, LightEditorTab, LightViewMode, NavSection, ShortcutActionPreset, SwitchViewMode,
-    describe_rgb_human, format_cap_pills, format_rgb_hex, hsv_to_rgb_u8,
-    offline_diagnostic_report, pack_rgb_u32, parse_hex_or_rgb, protocol_light_summary, rgb_to_hsv,
+    DropdownId, KeymapCategory, KeymapLayerView, LightEditorTab, LightViewMode, NavSection,
+    ShortcutActionPreset, SwitchViewMode, describe_rgb_human, format_cap_pills, format_rgb_hex,
+    hsv_to_rgb_u8, offline_diagnostic_report, pack_rgb_u32, parse_hex_or_rgb,
+    protocol_light_summary, rgb_to_hsv,
 };
 use crate::theme;
 use crate::widgets::{
     ButtonTone, COLOR_SWATCHES, DropdownChoice, KB_SCALE_DEFAULT, KeyboardCanvasMode,
-    SWITCH_OPTIONS, card_box, icon_btn, icon_pill, pill, primary_btn, recessed_well,
-    render_switch_2d_cross_section, secondary_btn, stat_tile,
+    SWITCH_OPTIONS, action_kind_tag, card_box, category_badge, icon_btn, icon_pill, pill,
+    primary_btn, recessed_well, render_switch_2d_cross_section, secondary_btn, stat_tile,
 };
 
 const AUDIO_EFFECT_OPTIONS: [(AudioEffectStyle, &str); 4] = [
@@ -55,10 +56,10 @@ const ARROW_CLUSTER_OPTIONS: [(ArrowClusterPreset, &str); 3] = [
 ];
 const HOTKEY_MODIFIER_OPTIONS: [(Option<u8>, &str); 6] = [
     (None, "None (Single Key)"),
-    (Some(keymap::idx::FN), "Fn (Default)"),
     (Some(keymap::idx::CAPS), "Caps Lock"),
     (Some(keymap::idx::R_CTRL), "Right Ctrl"),
     (Some(keymap::idx::L_ALT), "Left Alt"),
+    (Some(keymap::idx::R_ALT), "Right Alt"),
     (Some(keymap::idx::MENU), "Menu Key"),
 ];
 const QUICK_TRIGGER_KEYS: [u8; 11] = [
@@ -76,11 +77,7 @@ const QUICK_TRIGGER_KEYS: [u8; 11] = [
 ];
 
 impl ReaulaGui {
-    pub(crate) fn render_active_section(
-        &self,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Div {
+    pub(crate) fn render_active_section(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         match self.nav {
             NavSection::Diagnostics => self.view_diagnostics(cx),
             NavSection::Guide => self.view_guide(),
@@ -90,7 +87,7 @@ impl ReaulaGui {
                     NavSection::Main => self.view_main(state, cx),
                     NavSection::Calibration => self.view_calibration(state, cx),
                     NavSection::ColorLight => self.view_color_light(state, cx),
-                    NavSection::Hotkeys => self.view_hotkeys(state, cx),
+                    NavSection::Hotkeys => self.view_hotkeys(state, window, cx),
                     NavSection::Guide | NavSection::Diagnostics => unreachable!(),
                 },
             },
@@ -221,7 +218,16 @@ impl ReaulaGui {
                     },
                 ))
                 .child(stat_tile(
-                    "Daemon Hotkeys",
+                    "FW Fn Keymaps",
+                    format!("{} onboard slot(s)", state.keyboard_fn_map.len()),
+                    if state.keyboard_fn_map.is_empty() {
+                        theme::INK_MUTED
+                    } else {
+                        theme::FW_AMBER_INK
+                    },
+                ))
+                .child(stat_tile(
+                    "Daemon Keymaps",
                     format!(
                         "{} rule(s) ({})",
                         state.shortcut_rules.len(),
@@ -232,7 +238,7 @@ impl ReaulaGui {
                         }
                     ),
                     if state.shortcut_watcher_active {
-                        theme::INK_ACCENT
+                        theme::DM_AQUA_INK
                     } else {
                         theme::INK_MUTED
                     },
@@ -795,11 +801,11 @@ impl ReaulaGui {
                 ],
             ),
             (
-                "4. Daemon Hotkeys & SO_PEERCRED Security Architecture",
+                "4. Firmware Flash ([FW]) vs. Daemon Keymaps ([DM])",
                 &[
-                    "- Hardware USB HID (`/dev/hidraw3`) stays owned solely by `reaulad` inside `/run/reaula` (`0700` dir, `0600` socket).",
-                    "- Kernel `SO_PEERCRED` verifies every client UID/PID before reading bytes — zero raw sockets or root GUI privileges needed.",
-                    "- Daemon-memory Hotkeys watch hardware live travel edges inside `reaulad`. External commands always drop UID/GID back to your non-root user.",
+                    "- Hardware USB HID (`/dev/hidraw3`) stays owned solely by `reaulad` inside `/run/reaula` (`0700` dir, `0600` socket) with `SO_PEERCRED` verification.",
+                    "- [FW] Firmware Keymaps (`cmd 0x18`, Amber) write Fn + Key remaps directly to WIN 60 HE flash and work without any daemon (BIOS, Windows, etc.).",
+                    "- [DM] Daemon Keymaps (Aqua Blue #00D7FF) watch live analog depth inside `reaulad`, inject keys via `/dev/uinput` with `EVIOCGRAB` key-leak guard, and drop UID/GID for shell commands.",
                 ],
             ),
             (
@@ -823,7 +829,7 @@ impl ReaulaGui {
                 div()
                     .text_xs()
                     .text_color(rgb(theme::INK_MUTED))
-                    .child("Quick start: Use Main to configure actuation/SOCD, Color & Light for 3D + 2D RGB previews, Hotkeys for onboard Fn flash & daemon backup, and Diagnostics if keys misbehave."),
+                    .child("Quick start: Use Main to configure actuation/SOCD, Color & Light for 3D + 2D RGB previews, Keymaps for Firmware MCU flash ([FW]) vs. Daemon layers ([DM]), and Diagnostics if keys misbehave."),
             ),
         );
 
@@ -959,10 +965,7 @@ impl ReaulaGui {
         let view_mode = state.light_view_mode;
 
         let active_layer_label = if state.audio_active {
-            format!(
-                "Audio Sync · {}",
-                state.audio_config.style.label()
-            )
+            format!("Audio Sync · {}", state.audio_config.style.label())
         } else {
             match state.light_tab {
                 LightEditorTab::FirmwareEffects => {
@@ -1258,6 +1261,7 @@ impl ReaulaGui {
                                     st.camera_preset = None;
                                     this.dirty_3d = true;
                                 }
+                                cx.stop_propagation();
                                 cx.notify();
                             }))
                             .child(img(frame.clone()).w_full().h_full()),
@@ -2022,18 +2026,13 @@ impl ReaulaGui {
                             .flex_col()
                             .justify_end()
                             .overflow_hidden()
-                            .child(
-                                div()
-                                    .w_full()
-                                    .h(px(fill_h))
-                                    .bg(rgb(if lvl > 0.72 {
-                                        theme::INK_ACCENT
-                                    } else if lvl > 0.25 {
-                                        theme::SHADE_REGAL
-                                    } else {
-                                        theme::BORDER_REGAL
-                                    })),
-                            )
+                            .child(div().w_full().h(px(fill_h)).bg(rgb(if lvl > 0.72 {
+                                theme::INK_ACCENT
+                            } else if lvl > 0.25 {
+                                theme::SHADE_REGAL
+                            } else {
+                                theme::BORDER_REGAL
+                            })))
                     })),
             );
 
@@ -2094,115 +2093,121 @@ impl ReaulaGui {
                 cx,
             ));
 
-        let tuning_row = div()
-            .flex()
-            .flex_row()
-            .flex_wrap()
-            .items_end()
-            .gap_4()
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_size(px(10.5))
-                            .text_color(rgb(theme::INK_MUTED))
-                            .child("Stream FPS"),
-                    )
-                    .child(div().flex().flex_row().gap_1().children(
-                        AUDIO_FPS_OPTIONS.iter().map(|&f| {
-                            pill(("afps", usize::from(f)), format!("{f}"), cfg.fps == f).on_click(
-                                cx.listener(move |this, _, _, cx| {
-                                    if let Ok(st) = &mut this.conn {
-                                        st.audio_config.fps = f;
-                                        st.push_audio_live_config();
-                                    }
-                                    cx.notify();
-                                }),
-                            )
-                        }),
-                    )),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_size(px(10.5))
-                            .text_color(rgb(theme::INK_MUTED))
-                            .child("Brightness"),
-                    )
-                    .child(div().flex().flex_row().gap_1().children(
-                        (1..=LIGHT_MAX_LEVEL).map(|b| {
-                            pill(("abri", usize::from(b)), format!("{b}"), cfg.brightness == b)
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    if let Ok(st) = &mut this.conn {
-                                        st.audio_config.brightness = b;
-                                        st.push_audio_live_config();
-                                    }
-                                    cx.notify();
-                                }))
-                        }),
-                    )),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_size(px(10.5))
-                            .text_color(rgb(theme::INK_MUTED))
-                            .child("Input Gain"),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap_1p5()
-                            .child(secondary_btn("again-down", "-0.2").on_click(cx.listener(
-                                |this, _, _, cx| {
-                                    if let Ok(st) = &mut this.conn {
-                                        st.audio_config.gain =
-                                            (st.audio_config.gain - 0.2).clamp(0.4, 3.0);
-                                        st.push_audio_live_config();
-                                    }
-                                    cx.notify();
-                                },
-                            )))
-                            .child(
-                                div()
-                                    .min_w(px(46.0))
-                                    .px_2()
-                                    .py_1()
-                                    .rounded_md()
-                                    .bg(rgb(theme::SHADE_DEEP))
-                                    .border_1()
-                                    .border_color(rgb(theme::BORDER_SUBTLE))
-                                    .text_xs()
-                                    .text_color(rgb(theme::INK_ACCENT))
-                                    .flex()
-                                    .justify_center()
-                                    .child(format!("{:.1}x", cfg.gain)),
-                            )
-                            .child(secondary_btn("again-up", "+0.2").on_click(cx.listener(
-                                |this, _, _, cx| {
-                                    if let Ok(st) = &mut this.conn {
-                                        st.audio_config.gain =
-                                            (st.audio_config.gain + 0.2).clamp(0.4, 3.0);
-                                        st.push_audio_live_config();
-                                    }
-                                    cx.notify();
-                                },
-                            ))),
-                    ),
-            );
+        let tuning_row =
+            div()
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .items_end()
+                .gap_4()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_size(px(10.5))
+                                .text_color(rgb(theme::INK_MUTED))
+                                .child("Stream FPS"),
+                        )
+                        .child(div().flex().flex_row().gap_1().children(
+                            AUDIO_FPS_OPTIONS.iter().map(|&f| {
+                                pill(("afps", usize::from(f)), format!("{f}"), cfg.fps == f)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if let Ok(st) = &mut this.conn {
+                                            st.audio_config.fps = f;
+                                            st.push_audio_live_config();
+                                        }
+                                        cx.notify();
+                                    }))
+                            }),
+                        )),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_size(px(10.5))
+                                .text_color(rgb(theme::INK_MUTED))
+                                .child("Brightness"),
+                        )
+                        .child(div().flex().flex_row().gap_1().children(
+                            (1..=LIGHT_MAX_LEVEL).map(|b| {
+                                pill(
+                                    ("abri", usize::from(b)),
+                                    format!("{b}"),
+                                    cfg.brightness == b,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        if let Ok(st) = &mut this.conn {
+                                            st.audio_config.brightness = b;
+                                            st.push_audio_live_config();
+                                        }
+                                        cx.notify();
+                                    },
+                                ))
+                            }),
+                        )),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_size(px(10.5))
+                                .text_color(rgb(theme::INK_MUTED))
+                                .child("Input Gain"),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap_1p5()
+                                .child(secondary_btn("again-down", "-0.2").on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        if let Ok(st) = &mut this.conn {
+                                            st.audio_config.gain =
+                                                (st.audio_config.gain - 0.2).clamp(0.4, 3.0);
+                                            st.push_audio_live_config();
+                                        }
+                                        cx.notify();
+                                    },
+                                )))
+                                .child(
+                                    div()
+                                        .min_w(px(46.0))
+                                        .px_2()
+                                        .py_1()
+                                        .rounded_md()
+                                        .bg(rgb(theme::SHADE_DEEP))
+                                        .border_1()
+                                        .border_color(rgb(theme::BORDER_SUBTLE))
+                                        .text_xs()
+                                        .text_color(rgb(theme::INK_ACCENT))
+                                        .flex()
+                                        .justify_center()
+                                        .child(format!("{:.1}x", cfg.gain)),
+                                )
+                                .child(secondary_btn("again-up", "+0.2").on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        if let Ok(st) = &mut this.conn {
+                                            st.audio_config.gain =
+                                                (st.audio_config.gain + 0.2).clamp(0.4, 3.0);
+                                            st.push_audio_live_config();
+                                        }
+                                        cx.notify();
+                                    },
+                                ))),
+                        ),
+                );
 
         let mut card = card_box(
             "Audio-Reactive RGB Studio (Experimental)",
@@ -2611,14 +2616,10 @@ impl ReaulaGui {
             match kind {
                 0 => {
                     // 2D Saturation × Brightness (Value) square
-                    let cur_hue = this
-                        .picker_hues
-                        .get(id_prefix)
-                        .copied()
-                        .unwrap_or_else(|| {
-                            let [hr, s, vv] = rgb_to_hsv(col);
-                            if s > 0.03 && vv > 0.03 { hr } else { hue }
-                        });
+                    let cur_hue = this.picker_hues.get(id_prefix).copied().unwrap_or_else(|| {
+                        let [hr, s, vv] = rgb_to_hsv(col);
+                        if s > 0.03 && vv > 0.03 { hr } else { hue }
+                    });
                     this.picker_hues.insert(id_prefix, cur_hue);
                     let next_rgb = hsv_to_rgb_u8(cur_hue, u, 1.0 - v);
                     on_preset(this, next_rgb);
@@ -2691,15 +2692,20 @@ impl ReaulaGui {
                                 let s_mid = (c as f32 + 0.5) / cols as f32;
                                 let cell = hsv_to_rgb_u8(hue, s_mid, v_mid);
                                 window.paint_quad(fill(
-                                    bounds(point(px(x0), px(y0)), size(px(x1 - x0 + 0.5), px(y1 - y0 + 0.5))),
+                                    bounds(
+                                        point(px(x0), px(y0)),
+                                        size(px(x1 - x0 + 0.5), px(y1 - y0 + 0.5)),
+                                    ),
                                     rgb(pack_rgb_u32(cell)),
                                 ));
                             }
                         }
                         let rx = ox + sat * w;
                         let ry = oy + (1.0 - val) * h;
-                        let outer = bounds(point(px(rx - 5.0), px(ry - 5.0)), size(px(10.0), px(10.0)));
-                        let inner = bounds(point(px(rx - 4.0), px(ry - 4.0)), size(px(8.0), px(8.0)));
+                        let outer =
+                            bounds(point(px(rx - 5.0), px(ry - 5.0)), size(px(10.0), px(10.0)));
+                        let inner =
+                            bounds(point(px(rx - 4.0), px(ry - 4.0)), size(px(8.0), px(8.0)));
                         window.paint_quad(outline(outer, rgb(0x08101c), BorderStyle::Solid));
                         window.paint_quad(outline(inner, rgb(0xffffff), BorderStyle::Solid));
                     },
@@ -2751,7 +2757,10 @@ impl ReaulaGui {
                             rgb(0x09111e),
                         ));
                         window.paint_quad(fill(
-                            bounds(point(px(tx - 1.5), px(oy + 1.0)), size(px(3.0), px((h - 2.0).max(2.0)))),
+                            bounds(
+                                point(px(tx - 1.5), px(oy + 1.0)),
+                                size(px(3.0), px((h - 2.0).max(2.0))),
+                            ),
                             rgb(0xffffff),
                         ));
                     },
@@ -2760,12 +2769,8 @@ impl ReaulaGui {
                 .h_full(),
             );
 
-        let swatch_strip = div()
-            .flex()
-            .flex_row()
-            .flex_wrap()
-            .gap_1()
-            .children(COLOR_SWATCHES.iter().enumerate().map(|(idx, &(name, sw))| {
+        let swatch_strip = div().flex().flex_row().flex_wrap().gap_1().children(
+            COLOR_SWATCHES.iter().enumerate().map(|(idx, &(name, sw))| {
                 let selected = col == sw;
                 div()
                     .id((id_prefix, 300usize + idx))
@@ -2790,7 +2795,8 @@ impl ReaulaGui {
                         on_preset(this, sw);
                         cx.notify();
                     }))
-            }));
+            }),
+        );
 
         let rgb_bar_rows: Vec<_> = [
             (0usize, 2u8, "R", bounds_r, [239u8, 68, 68]),
@@ -2799,118 +2805,115 @@ impl ReaulaGui {
         ]
         .into_iter()
         .map(|(ch, kind, ch_lbl, b_rc, accent_rgb)| {
-                    let pct = f32::from(col[ch]) / 255.0;
-                    let mut bar_end = col;
-                    bar_end[ch] = 255;
-                    let mut bar_start = col;
-                    bar_start[ch] = 0;
+            let pct = f32::from(col[ch]) / 255.0;
+            let mut bar_end = col;
+            bar_end[ch] = 255;
+            let mut bar_start = col;
+            bar_start[ch] = 0;
 
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1p5()
+                .child(
                     div()
+                        .w(px(12.0))
+                        .text_size(px(10.5))
+                        .text_color(rgb(pack_rgb_u32(accent_rgb)))
+                        .child(ch_lbl),
+                )
+                .child(
+                    div()
+                        .id((id_prefix, 200usize + usize::from(kind)))
+                        .flex_1()
+                        .min_w(px(90.0))
+                        .h(px(12.0))
+                        .rounded_xs()
+                        .overflow_hidden()
+                        .border_1()
+                        .border_color(rgb(theme::BORDER_MATTE))
+                        .cursor_ew_resize()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                                this.dragging_picker = Some((id_prefix, kind));
+                                apply_picker_drag(this, kind, ev.position.x, ev.position.y, cx);
+                            }),
+                        )
+                        .child(
+                            canvas(
+                                move |b, _, _| {
+                                    b_rc.borrow_mut().insert((id_prefix, kind), b);
+                                    b
+                                },
+                                move |b, _, window, _| {
+                                    let ox = f32::from(b.origin.x);
+                                    let oy = f32::from(b.origin.y);
+                                    let w = f32::from(b.size.width);
+                                    let h = f32::from(b.size.height);
+                                    let steps = 16usize;
+                                    for s in 0..steps {
+                                        let t = (s as f32 + 0.5) / steps as f32;
+                                        let x0 = ox + (s as f32 / steps as f32) * w;
+                                        let x1 = ox + ((s + 1) as f32 / steps as f32) * w;
+                                        let mix_c = [
+                                            (f32::from(bar_start[0]) * (1.0 - t)
+                                                + f32::from(bar_end[0]) * t)
+                                                as u8,
+                                            (f32::from(bar_start[1]) * (1.0 - t)
+                                                + f32::from(bar_end[1]) * t)
+                                                as u8,
+                                            (f32::from(bar_start[2]) * (1.0 - t)
+                                                + f32::from(bar_end[2]) * t)
+                                                as u8,
+                                        ];
+                                        window.paint_quad(fill(
+                                            bounds(
+                                                point(px(x0), px(oy)),
+                                                size(px(x1 - x0 + 0.5), px(h)),
+                                            ),
+                                            rgb(pack_rgb_u32(mix_c)),
+                                        ));
+                                    }
+                                    let tx = (ox + pct * w).clamp(ox + 1.5, ox + w - 1.5);
+                                    window.paint_quad(fill(
+                                        bounds(point(px(tx - 1.5), px(oy)), size(px(3.0), px(h))),
+                                        rgb(0xffffff),
+                                    ));
+                                },
+                            )
+                            .w_full()
+                            .h_full(),
+                        ),
+                )
+                .child(pill((id_prefix, ch * 2), "-5", false).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        on_nudge(this, ch, -5);
+                        cx.notify();
+                    },
+                )))
+                .child(
+                    div()
+                        .w(px(26.0))
                         .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap_1p5()
-                        .child(
-                            div()
-                                .w(px(12.0))
-                                .text_size(px(10.5))
-                                .text_color(rgb(pack_rgb_u32(accent_rgb)))
-                                .child(ch_lbl),
-                        )
-                        .child(
-                            div()
-                                .id((id_prefix, 200usize + usize::from(kind)))
-                                .flex_1()
-                                .min_w(px(90.0))
-                                .h(px(12.0))
-                                .rounded_xs()
-                                .overflow_hidden()
-                                .border_1()
-                                .border_color(rgb(theme::BORDER_MATTE))
-                                .cursor_ew_resize()
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
-                                        this.dragging_picker = Some((id_prefix, kind));
-                                        apply_picker_drag(this, kind, ev.position.x, ev.position.y, cx);
-                                    }),
-                                )
-                                .child(
-                                    canvas(
-                                        move |b, _, _| {
-                                            b_rc.borrow_mut().insert((id_prefix, kind), b);
-                                            b
-                                        },
-                                        move |b, _, window, _| {
-                                            let ox = f32::from(b.origin.x);
-                                            let oy = f32::from(b.origin.y);
-                                            let w = f32::from(b.size.width);
-                                            let h = f32::from(b.size.height);
-                                            let steps = 16usize;
-                                            for s in 0..steps {
-                                                let t = (s as f32 + 0.5) / steps as f32;
-                                                let x0 = ox + (s as f32 / steps as f32) * w;
-                                                let x1 = ox + ((s + 1) as f32 / steps as f32) * w;
-                                                let mix_c = [
-                                                    (f32::from(bar_start[0]) * (1.0 - t)
-                                                        + f32::from(bar_end[0]) * t)
-                                                        as u8,
-                                                    (f32::from(bar_start[1]) * (1.0 - t)
-                                                        + f32::from(bar_end[1]) * t)
-                                                        as u8,
-                                                    (f32::from(bar_start[2]) * (1.0 - t)
-                                                        + f32::from(bar_end[2]) * t)
-                                                        as u8,
-                                                ];
-                                                window.paint_quad(fill(
-                                                    bounds(point(px(x0), px(oy)), size(px(x1 - x0 + 0.5), px(h))),
-                                                    rgb(pack_rgb_u32(mix_c)),
-                                                ));
-                                            }
-                                            let tx = (ox + pct * w).clamp(ox + 1.5, ox + w - 1.5);
-                                            window.paint_quad(fill(
-                                                bounds(point(px(tx - 1.5), px(oy)), size(px(3.0), px(h))),
-                                                rgb(0xffffff),
-                                            ));
-                                        },
-                                    )
-                                    .w_full()
-                                    .h_full(),
-                                ),
-                        )
-                        .child(
-                            pill((id_prefix, ch * 2), "-5", false).on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    on_nudge(this, ch, -5);
-                                    cx.notify();
-                                },
-                            )),
-                        )
-                        .child(
-                            div()
-                                .w(px(26.0))
-                                .flex()
-                                .justify_center()
-                                .text_xs()
-                                .text_color(rgb(theme::INK_PRIMARY))
-                                .child(format!("{}", col[ch])),
-                        )
-                        .child(
-                            pill((id_prefix, ch * 2 + 1), "+5", false).on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    on_nudge(this, ch, 5);
-                                    cx.notify();
-                                },
-                            )),
-                        )
+                        .justify_center()
+                        .text_xs()
+                        .text_color(rgb(theme::INK_PRIMARY))
+                        .child(format!("{}", col[ch])),
+                )
+                .child(
+                    pill((id_prefix, ch * 2 + 1), "+5", false).on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            on_nudge(this, ch, 5);
+                            cx.notify();
+                        },
+                    )),
+                )
         })
         .collect();
 
-        let rgb_bars = div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .children(rgb_bar_rows);
+        let rgb_bars = div().flex().flex_col().gap_1().children(rgb_bar_rows);
 
         recessed_well()
             .id((id_prefix, 102usize))
@@ -2991,46 +2994,38 @@ impl ReaulaGui {
                             .flex_row()
                             .items_center()
                             .gap_1p5()
-                            .child(
-                                pill((id_prefix, 103usize), "Copy Hex", false).on_click(
-                                    cx.listener(move |this, _, _, cx| {
-                                        let hex = format_rgb_hex(col);
-                                        cx.write_to_clipboard(ClipboardItem::new_string(
-                                            hex.clone(),
-                                        ));
-                                        this.status_line = format!("Copied {hex} to clipboard.");
-                                        cx.notify();
-                                    }),
-                                ),
-                            )
-                            .child(
-                                pill((id_prefix, 104usize), "Paste Hex", false).on_click(
-                                    cx.listener(move |this, _, _, cx| {
-                                        let txt = cx
-                                            .read_from_clipboard()
-                                            .and_then(|item| item.text());
-                                        if let Some(raw) = txt
-                                            && let Some(parsed) = parse_hex_or_rgb(&raw)
-                                        {
-                                            let [ph, ps, pv] = rgb_to_hsv(parsed);
-                                            if ps > 0.03 && pv > 0.03 {
-                                                this.picker_hues.insert(id_prefix, ph);
-                                            }
-                                            on_preset(this, parsed);
-                                            this.status_line = format!(
-                                                "Applied {} ({}) from clipboard.",
-                                                describe_rgb_human(parsed),
-                                                format_rgb_hex(parsed)
-                                            );
-                                        } else {
-                                            this.status_line =
-                                                "Clipboard does not contain #RRGGBB or R,G,B text."
-                                                    .into();
+                            .child(pill((id_prefix, 103usize), "Copy Hex", false).on_click(
+                                cx.listener(move |this, _, _, cx| {
+                                    let hex = format_rgb_hex(col);
+                                    cx.write_to_clipboard(ClipboardItem::new_string(hex.clone()));
+                                    this.status_line = format!("Copied {hex} to clipboard.");
+                                    cx.notify();
+                                }),
+                            ))
+                            .child(pill((id_prefix, 104usize), "Paste Hex", false).on_click(
+                                cx.listener(move |this, _, _, cx| {
+                                    let txt = cx.read_from_clipboard().and_then(|item| item.text());
+                                    if let Some(raw) = txt
+                                        && let Some(parsed) = parse_hex_or_rgb(&raw)
+                                    {
+                                        let [ph, ps, pv] = rgb_to_hsv(parsed);
+                                        if ps > 0.03 && pv > 0.03 {
+                                            this.picker_hues.insert(id_prefix, ph);
                                         }
-                                        cx.notify();
-                                    }),
-                                ),
-                            )
+                                        on_preset(this, parsed);
+                                        this.status_line = format!(
+                                            "Applied {} ({}) from clipboard.",
+                                            describe_rgb_human(parsed),
+                                            format_rgb_hex(parsed)
+                                        );
+                                    } else {
+                                        this.status_line =
+                                            "Clipboard does not contain #RRGGBB or R,G,B text."
+                                                .into();
+                                    }
+                                    cx.notify();
+                                }),
+                            ))
                             .child(self.render_dropdown(
                                 dropdown_id,
                                 None,
@@ -3074,22 +3069,24 @@ impl ReaulaGui {
     }
 
     // -----------------------------------------------------------------------
-    // 5. HOTKEYS: Daemon In-Memory Shortcuts & Triggers
+    // 5. KEYMAPS: Firmware MCU Flash ([FW]) vs. Daemon Host Memory ([DM])
     // -----------------------------------------------------------------------
-    fn view_hotkeys(&self, state: &ConnectedState, cx: &mut Context<Self>) -> Div {
-        let pick_name = keymap::by_index(state.draft_rule_key).map_or("Key", |k| k.name);
-        let gesture_preview = match state.draft_rule_modifier {
-            Some(m) => {
-                let mname = keymap::by_index(m).map_or("Mod", |k| k.name);
-                format!("{mname} + {pick_name}")
-            }
-            None => pick_name.to_string(),
-        };
+    fn view_hotkeys(&self, state: &ConnectedState, window: &Window, cx: &mut Context<Self>) -> Div {
+        div()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(self.render_hotkey_layer_overview(state, cx))
+            .child(self.render_hotkey_composer(state, window, cx))
+            .child(self.render_hotkey_rule_columns(state, cx))
+            .child(self.render_hotkey_logs(state))
+    }
+
+    fn render_hotkey_layer_overview(&self, state: &ConnectedState, cx: &mut Context<Self>) -> Div {
         let persist_label = state
             .shortcut_persist_path
             .as_deref()
             .unwrap_or("daemon memory");
-
         let guard_label = if state.evdev_grab_active {
             "ACTIVE (EVIOCGRAB)"
         } else if state.uinput_ready {
@@ -3097,197 +3094,392 @@ impl ReaulaGui {
         } else {
             "OFFLINE"
         };
+        let enabled_dm_count = state.shortcut_rules.iter().filter(|r| r.enabled).count();
+        let (aqua_keys, aqua_pulsing) = state.active_daemon_indicators();
 
-        let arrow_choices: Vec<DropdownChoice> = ARROW_CLUSTER_OPTIONS
-            .iter()
-            .map(|&(_, label)| DropdownChoice {
-                label: label.into(),
-                swatch: None,
-                icon: Some(MaterialIcon::Bolt),
-                selected: false,
-            })
-            .collect();
+        let fw_summary_card = div()
+            .flex_1()
+            .min_w(px(300.0))
+            .p_3()
+            .rounded_lg()
+            .bg(rgb(theme::FW_AMBER_BG))
+            .border_1()
+            .border_color(rgb(if state.keymap_layer_view == KeymapLayerView::FirmwareOnly {
+                theme::FW_AMBER_BORDER
+            } else {
+                theme::FW_AMBER_DIM_BORDER
+            }))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_2()
+                            .child(category_badge("FW · MCU FLASH", true, false))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(theme::INK_PRIMARY))
+                                    .child("Firmware-Level Keymaps"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(theme::FW_AMBER_INK))
+                            .child(format!("{} slot(s)", state.keyboard_fn_map.len())),
+                    ),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(theme::INK_SECONDARY))
+                    .child("Stored inside WIN 60 HE onboard flash (`cmd 0x18`). Runs on keyboard silicon with zero daemon (BIOS, Windows, Linux TTY). Hardware Fn + Key -> USB HID keys only."),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .child(pill(
+                        "hk-card-fw-filter",
+                        "Show Only [FW] on Board",
+                        state.keymap_layer_view == KeymapLayerView::FirmwareOnly,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Ok(st) = &mut this.conn {
+                            st.keymap_layer_view = KeymapLayerView::FirmwareOnly;
+                        }
+                        cx.notify();
+                    })))
+                    .child(pill(
+                        "hk-card-fw-compose",
+                        "Compose [FW] Rule",
+                        state.draft_category == KeymapCategory::FirmwareFnFlash,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Ok(st) = &mut this.conn {
+                            st.set_keymap_draft_category(KeymapCategory::FirmwareFnFlash);
+                        }
+                        cx.notify();
+                    }))),
+            );
 
-        let mut top_bar = card_box(
-            "Keyboard Onboard Fn Flash + Daemon Backup Hotkeys",
-            Some(&format!(
-                "KB Fn Flash: {} slot(s) | /dev/uinput: {} | Key-Leak Guard: {} | Daemon: {persist_label}",
-                state.keyboard_fn_map.len(),
-                if state.uinput_ready { "READY" } else { "OFFLINE" },
-                guard_label,
-            )),
+        let dm_summary_card = div()
+            .flex_1()
+            .min_w(px(300.0))
+            .p_3()
+            .rounded_lg()
+            .bg(rgb(theme::DM_AQUA_BG))
+            .border_1()
+            .border_color(rgb(if state.keymap_layer_view == KeymapLayerView::DaemonOnly {
+                theme::DM_AQUA_BORDER
+            } else {
+                theme::DM_AQUA_DIM_BORDER
+            }))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_2()
+                            .child(category_badge("DM · HOST LAYER", false, false))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(theme::INK_PRIMARY))
+                                    .child("Daemon-Level Keymaps"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(theme::DM_AQUA_INK))
+                            .child(format!(
+                                "{enabled_dm_count} active / {} total",
+                                state.shortcut_rules.len()
+                            )),
+                    ),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(theme::INK_SECONDARY))
+                    .child(format!(
+                        "Evaluated by `reaulad` ({persist_label}) · /dev/uinput: {} · Guard: {guard_label}. Supports analog mm depth, single keys/chords, media, profiles & shell. Glows Aqua Blue (#00D7FF) on LEDs.",
+                        if state.uinput_ready { "READY" } else { "OFFLINE" }
+                    )),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .child(pill(
+                        "hk-card-dm-filter",
+                        "Show Only [DM] on Board",
+                        state.keymap_layer_view == KeymapLayerView::DaemonOnly,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Ok(st) = &mut this.conn {
+                            st.keymap_layer_view = KeymapLayerView::DaemonOnly;
+                        }
+                        cx.notify();
+                    })))
+                    .child(pill(
+                        "hk-card-dm-compose",
+                        "Compose [DM] Rule",
+                        state.draft_category == KeymapCategory::DaemonMemory,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Ok(st) = &mut this.conn {
+                            st.set_keymap_draft_category(KeymapCategory::DaemonMemory);
+                        }
+                        cx.notify();
+                    }))),
+            );
+
+        let board_controls = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .justify_between()
+            .gap_3()
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_1p5()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(theme::INK_MUTED))
+                            .mr_1()
+                            .child("Board View:"),
+                    )
+                    .children([
+                        KeymapLayerView::Both,
+                        KeymapLayerView::FirmwareOnly,
+                        KeymapLayerView::DaemonOnly,
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, layer)| {
+                        pill(
+                            ("hk-layer-filter", idx),
+                            layer.label(),
+                            state.keymap_layer_view == layer,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Ok(st) = &mut this.conn {
+                                st.keymap_layer_view = layer;
+                            }
+                            cx.notify();
+                        }))
+                    })),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .gap_2()
+                    .child(
+                        icon_pill(
+                            "hk-watcher-toggle",
+                            Some(MaterialIcon::Sensors),
+                            if state.shortcut_watcher_active {
+                                "Daemon Watcher: ACTIVE"
+                            } else {
+                                "Daemon Watcher: PAUSED"
+                            },
+                            state.shortcut_watcher_active,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Ok(st) = &mut this.conn {
+                                st.shortcut_watcher_active = !st.shortcut_watcher_active;
+                                let _ = st.sync_shortcuts();
+                            }
+                            cx.notify();
+                        })),
+                    )
+                    .child(
+                        icon_btn(
+                            "hk-record",
+                            Some(MaterialIcon::FiberManualRecord),
+                            if state.shortcut_recording {
+                                "Recording... (Cancel)"
+                            } else {
+                                "Memorize Gesture"
+                            },
+                            ButtonTone::Warn {
+                                active: state.shortcut_recording,
+                            },
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Ok(st) = &mut this.conn {
+                                st.shortcut_recording = !st.shortcut_recording;
+                                st.record_first_key = None;
+                                if st.shortcut_recording {
+                                    if !st.travel_enabled {
+                                        let _ = st.start_travel();
+                                    }
+                                    st.captured_gesture_banner = Some(
+                                        "Press a single key, OR hold Fn (or any modifier) and tap a 2nd key (e.g. Fn + T).".into(),
+                                    );
+                                }
+                            }
+                            cx.notify();
+                        })),
+                    )
+                    .child(
+                        icon_btn(
+                            "hk-reload",
+                            Some(MaterialIcon::Refresh),
+                            "Reload Both",
+                            ButtonTone::Secondary,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Ok(st) = &mut this.conn {
+                                let _ = st.refresh_shortcuts();
+                                let _ = st.refresh_keyboard_fn_map();
+                                this.status_line =
+                                    "Reloaded both [FW] Firmware Fn flash and [DM] Daemon rules.".into();
+                            }
+                            cx.notify();
+                        })),
+                    ),
+            );
+
+        let legend_item = |swatch_hex: u32, label: &'static str, text_col: u32| {
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1p5()
+                .child(
+                    div()
+                        .w(px(10.0))
+                        .h(px(10.0))
+                        .rounded_xs()
+                        .bg(rgb(swatch_hex))
+                        .border_1()
+                        .border_color(rgb(theme::BORDER_REGAL)),
+                )
+                .child(div().text_xs().text_color(rgb(text_col)).child(label))
+        };
+
+        let indicator_row = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_3()
+                    .child(legend_item(
+                        theme::FW_AMBER_BORDER,
+                        "FW:Key = Firmware Flash (Amber · Fn live glow)",
+                        theme::FW_AMBER_INK,
+                    ))
+                    .child(legend_item(
+                        theme::DM_AQUA_BORDER,
+                        "DM:Act = Daemon Keymap (Aqua #00D7FF · live glow)",
+                        theme::DM_AQUA_INK,
+                    ))
+                    .child(legend_item(
+                        theme::OVERLAP_BORDER,
+                        "FW+DM = Both Layers on Key",
+                        theme::OVERLAP_INK,
+                    )),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .child(if !aqua_pulsing.is_empty() {
+                        category_badge(
+                            format!("DM ACTIVE ({} key)", aqua_pulsing.len()),
+                            false,
+                            true,
+                        )
+                    } else if !aqua_keys.is_empty() {
+                        category_badge(format!("DM LAYER ({} key)", aqua_keys.len()), false, true)
+                    } else if state.is_fn_held() {
+                        category_badge("FW Fn LAYER HELD", true, true)
+                    } else {
+                        div()
+                            .text_xs()
+                            .text_color(rgb(theme::INK_MUTED))
+                            .child("Click = Set Trigger · Shift+Click = Daemon Modifier")
+                    }),
+            );
+
+        let mut card = card_box(
+            "WIN 60 HE Keymaps — Hardware Firmware Flash vs. Linux Daemon Memory",
+            Some("Every binding is strictly separated into [FW] Onboard Flash (Amber) or [DM] Daemon Layer (Aqua Blue)"),
         )
         .child(
             div()
                 .flex()
                 .flex_row()
                 .flex_wrap()
-                .items_center()
-                .justify_between()
                 .gap_3()
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .flex_wrap()
-                        .gap_2()
-                        .child(
-                            icon_pill(
-                                "hk-watcher-toggle",
-                                Some(MaterialIcon::Sensors),
-                                if state.shortcut_watcher_active {
-                                    "Watcher: ACTIVE"
-                                } else {
-                                    "Watcher: PAUSED"
-                                },
-                                state.shortcut_watcher_active,
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if let Ok(st) = &mut this.conn {
-                                    st.shortcut_watcher_active = !st.shortcut_watcher_active;
-                                    let _ = st.sync_shortcuts();
-                                }
-                                cx.notify();
-                            })),
-                        )
-                        .child(
-                            icon_btn(
-                                "hk-sync",
-                                Some(MaterialIcon::Save),
-                                "Save / Memorize Now",
-                                ButtonTone::Secondary,
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if let Ok(st) = &mut this.conn {
-                                    match st.sync_shortcuts() {
-                                        Ok(()) => {
-                                            this.status_line = "Memorized hotkey rules to daemon & disk.".into();
-                                        }
-                                        Err(e) => this.status_line = e,
-                                    }
-                                }
-                                cx.notify();
-                            })),
-                        )
-                        .child(
-                            icon_btn(
-                                "hk-reload",
-                                Some(MaterialIcon::Refresh),
-                                "Reload Both",
-                                ButtonTone::Secondary,
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if let Ok(st) = &mut this.conn {
-                                    let _ = st.refresh_shortcuts();
-                                    let _ = st.refresh_keyboard_fn_map();
-                                }
-                                cx.notify();
-                            })),
-                        )
-                        .child(
-                            icon_btn(
-                                "hk-record",
-                                Some(MaterialIcon::FiberManualRecord),
-                                if state.shortcut_recording {
-                                    "Recording... (Cancel)"
-                                } else {
-                                    "Memorize Gesture"
-                                },
-                                ButtonTone::Warn {
-                                    active: state.shortcut_recording,
-                                },
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if let Ok(st) = &mut this.conn {
-                                    st.shortcut_recording = !st.shortcut_recording;
-                                    st.record_first_key = None;
-                                    if st.shortcut_recording {
-                                        if !st.travel_enabled {
-                                            let _ = st.start_travel();
-                                        }
-                                        st.captured_gesture_banner = Some(
-                                            "Press a single key, OR hold Fn (or any modifier) and tap a 2nd key (e.g. Fn + T).".into(),
-                                        );
-                                    }
-                                }
-                                cx.notify();
-                            })),
-                        ),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .flex_wrap()
-                        .items_center()
-                        .gap_2()
-                        .child(self.render_dropdown(
-                            DropdownId::HotkeyArrowKb,
-                            None,
-                            "Flash Arrows -> KB",
-                            None,
-                            Some(MaterialIcon::Memory),
-                            195.0,
-                            arrow_choices
-                                .iter()
-                                .map(|c| DropdownChoice {
-                                    label: c.label.clone(),
-                                    swatch: None,
-                                    icon: Some(MaterialIcon::Memory),
-                                    selected: false,
-                                })
-                                .collect(),
-                            |this, idx, _| {
-                                let preset = ARROW_CLUSTER_OPTIONS[idx].0;
-                                if let Ok(st) = &mut this.conn {
-                                    match st.save_arrow_cluster_to_keyboard(preset) {
-                                        Ok(msg) => this.status_line = msg,
-                                        Err(e) => this.status_line = e,
-                                    }
-                                }
-                            },
-                            cx,
-                        ))
-                        .child(self.render_dropdown(
-                            DropdownId::HotkeyArrowDaemon,
-                            None,
-                            "Add Arrows -> Daemon",
-                            None,
-                            Some(MaterialIcon::Bolt),
-                            195.0,
-                            arrow_choices,
-                            |this, idx, _| {
-                                let (preset, label) = ARROW_CLUSTER_OPTIONS[idx];
-                                if let Ok(st) = &mut this.conn {
-                                    st.add_fn_arrow_cluster(preset);
-                                    match st.sync_shortcuts() {
-                                        Ok(()) => {
-                                            this.status_line = format!(
-                                                "Memorized {label} (Key-Leak Guard suppresses raw letters)!"
-                                            );
-                                        }
-                                        Err(e) => this.status_line = e,
-                                    }
-                                }
-                            },
-                            cx,
-                        )),
-                ),
-        );
+                .child(fw_summary_card)
+                .child(dm_summary_card),
+        )
+        .child(board_controls)
+        .child(indicator_row);
 
         if !state.uinput_ready {
             let reason = state
                 .uinput_error
                 .as_deref()
                 .unwrap_or("/dev/uinput unavailable in reaulad");
-            top_bar = top_bar.child(
+            card = card.child(
                 recessed_well()
                     .p_2p5()
                     .border_color(rgb(theme::BORDER_DANGER))
                     .text_xs()
                     .text_color(rgb(theme::INK_DANGER))
                     .child(format!(
-                        "Virtual Key Injection (/dev/uinput) OFFLINE: {reason}"
+                        "[DM] Virtual Key Injection (/dev/uinput) OFFLINE: {reason}"
                     )),
             );
         }
@@ -3298,8 +3490,8 @@ impl ReaulaGui {
             } else {
                 theme::INK_WARN
             };
-            top_bar = top_bar.child(div().text_xs().text_color(rgb(col)).child(format!(
-                "Latest Trigger: [{}] {} -> {}",
+            card = card.child(div().text_xs().text_color(rgb(col)).child(format!(
+                "Latest [DM] Trigger: [{}] {} -> {}",
                 if last_log.success { "OK" } else { "FAIL" },
                 last_log.rule_name,
                 last_log.message
@@ -3307,7 +3499,7 @@ impl ReaulaGui {
         }
 
         if let Some(banner) = &state.captured_gesture_banner {
-            top_bar = top_bar.child(
+            card = card.child(
                 div()
                     .p_2p5()
                     .rounded_md()
@@ -3328,83 +3520,46 @@ impl ReaulaGui {
             );
         }
 
-        let (aqua_keys, aqua_pulsing) = state.active_daemon_indicators();
-        let indicator_row = div()
-            .flex()
-            .flex_row()
-            .flex_wrap()
-            .items_center()
-            .justify_between()
-            .gap_2()
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .items_center()
-                    .gap_2()
-                    .child(pill(
-                        "hk-aqua-legend",
-                        if !aqua_pulsing.is_empty() {
-                            format!(
-                                "Daemon Indicator: AQUA ACTIVE ({} key)",
-                                aqua_pulsing.len()
-                            )
-                        } else if !aqua_keys.is_empty() {
-                            format!(
-                                "Daemon Layer: AQUA GLOW ({} key)",
-                                aqua_keys.len()
-                            )
-                        } else {
-                            "Daemon Layer Glow: Aqua Blue (#00D7FF)".into()
-                        },
-                        !aqua_keys.is_empty(),
-                    ))
-                    .child(pill(
-                        "hk-fw-legend",
-                        format!(
-                            "Firmware Fn Flash: Amber ({} slot)",
-                            state.keyboard_fn_map.len()
-                        ),
-                        state.is_fn_held(),
-                    )),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(theme::INK_MUTED))
-                    .child("Click = Trigger · Shift+Click = Modifier · Aqua = Daemon memory mapping · Amber = Hardware Fn flash"),
-            );
+        card.child(self.render_keyboard_canvas(
+            state,
+            KeyboardCanvasMode::HotkeyPicker,
+            1.15,
+            0.0,
+            cx,
+        ))
+    }
 
-        top_bar = top_bar
-            .child(indicator_row)
-            .child(self.render_keyboard_canvas(
-                state,
-                KeyboardCanvasMode::HotkeyPicker,
-                1.15,
-                0.0,
-                cx,
-            ));
+    fn render_hotkey_composer(
+        &self,
+        state: &ConnectedState,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let pick_name = keymap::by_index(state.draft_rule_key).map_or("Key", |k| k.name);
+        let dm_mod = state.draft_rule_modifier.filter(|&m| m != keymap::idx::FN);
+        let gesture_preview = if state.draft_category == KeymapCategory::FirmwareFnFlash {
+            format!("Fn + {pick_name}")
+        } else {
+            match dm_mod {
+                Some(m) => {
+                    let mname = keymap::by_index(m).map_or("Mod", |k| k.name);
+                    format!("{mname} + {pick_name}")
+                }
+                None => pick_name.to_string(),
+            }
+        };
 
-        let current_mod_label = HOTKEY_MODIFIER_OPTIONS
+        let arrow_choices: Vec<DropdownChoice> = ARROW_CLUSTER_OPTIONS
             .iter()
-            .find(|(m, _)| *m == state.draft_rule_modifier)
-            .map_or_else(
-                || {
-                    state
-                        .draft_rule_modifier
-                        .and_then(keymap::by_index)
-                        .map_or("Custom".into(), |k| k.name.to_string())
-                },
-                |(_, lbl)| (*lbl).to_string(),
-            );
-        let mod_choices: Vec<DropdownChoice> = HOTKEY_MODIFIER_OPTIONS
-            .iter()
-            .map(|&(m, lbl)| DropdownChoice {
-                label: lbl.into(),
+            .map(|&(_, label)| DropdownChoice {
+                label: label.into(),
                 swatch: None,
-                icon: None,
-                selected: state.draft_rule_modifier == m,
+                icon: Some(if state.draft_category == KeymapCategory::FirmwareFnFlash {
+                    MaterialIcon::Memory
+                } else {
+                    MaterialIcon::Bolt
+                }),
+                selected: false,
             })
             .collect();
 
@@ -3431,7 +3586,272 @@ impl ReaulaGui {
                 }
             })
             .collect();
+        let trigger_indices_for_cb = trigger_indices.clone();
 
+        let category_bar = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(theme::INK_MUTED))
+                    .mr_1()
+                    .child("Target Category:"),
+            )
+            .child(
+                icon_pill(
+                    "hk-cat-fw",
+                    Some(MaterialIcon::Memory),
+                    format!("1. {} · cmd 0x18", KeymapCategory::FirmwareFnFlash.label()),
+                    state.draft_category == KeymapCategory::FirmwareFnFlash,
+                )
+                .border_color(rgb(
+                    if state.draft_category == KeymapCategory::FirmwareFnFlash {
+                        theme::FW_AMBER_BORDER
+                    } else {
+                        theme::FW_AMBER_DIM_BORDER
+                    },
+                ))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if let Ok(st) = &mut this.conn {
+                        st.set_keymap_draft_category(KeymapCategory::FirmwareFnFlash);
+                    }
+                    cx.notify();
+                })),
+            )
+            .child(
+                icon_pill(
+                    "hk-cat-dm",
+                    Some(MaterialIcon::Bolt),
+                    format!("2. {} · reaulad", KeymapCategory::DaemonMemory.label()),
+                    state.draft_category == KeymapCategory::DaemonMemory,
+                )
+                .border_color(rgb(
+                    if state.draft_category == KeymapCategory::DaemonMemory {
+                        theme::DM_AQUA_BORDER
+                    } else {
+                        theme::DM_AQUA_DIM_BORDER
+                    },
+                ))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if let Ok(st) = &mut this.conn {
+                        st.set_keymap_draft_category(KeymapCategory::DaemonMemory);
+                    }
+                    cx.notify();
+                })),
+            );
+
+        let editing_id = if state.draft_category == KeymapCategory::DaemonMemory {
+            state.editing_daemon_rule_id
+        } else {
+            None
+        };
+        let mut composer = card_box(
+            if let Some(eid) = editing_id {
+                format!(
+                    "Editing [DM] Rule #{eid} — {} · Gesture: {gesture_preview}",
+                    state.draft_category.label()
+                )
+            } else {
+                format!(
+                    "Create / Edit Keymap — {} · Gesture: {gesture_preview}",
+                    state.draft_category.label()
+                )
+            },
+            Some("Switch Target Category below: only controls valid for that engine are shown"),
+        )
+        .border_color(rgb(
+            if state.draft_category == KeymapCategory::FirmwareFnFlash {
+                theme::FW_AMBER_DIM_BORDER
+            } else if editing_id.is_some() {
+                theme::DM_AQUA_BORDER
+            } else {
+                theme::DM_AQUA_DIM_BORDER
+            },
+        ))
+        .child(category_bar);
+
+        if state.draft_category == KeymapCategory::FirmwareFnFlash {
+            let fw_vks = ConnectedState::firmware_compatible_virtual_keys();
+            let current_vk = if fw_vks.contains(&state.draft_virtual_key) {
+                state.draft_virtual_key
+            } else {
+                VirtualKey::Up
+            };
+            let vk_choices: Vec<DropdownChoice> = fw_vks
+                .iter()
+                .map(|&vk| DropdownChoice {
+                    label: vk.label().into(),
+                    swatch: None,
+                    icon: None,
+                    selected: vk == current_vk,
+                })
+                .collect();
+            let fw_vks_for_cb = fw_vks.clone();
+
+            composer = composer.child(
+                recessed_well()
+                    .p_2p5()
+                    .bg(rgb(theme::FW_AMBER_BG))
+                    .border_color(rgb(theme::FW_AMBER_DIM_BORDER))
+                    .text_xs()
+                    .text_color(rgb(theme::FW_AMBER_INK))
+                    .child("Hardware MCU Flash Scope: Chord is fixed to Fn + Key, supports standard USB HID keys only (Media/Shell require Daemon Level), and works without running reaulad."),
+            );
+
+            if let Some(&existing_hid) = state.keyboard_fn_map.get(&state.draft_rule_key) {
+                let dst = keymap::usb_hid_name(existing_hid);
+                composer = composer.child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(theme::INK_SECONDARY))
+                        .child(format!(
+                            "Existing FW Flash slot on {pick_name}: Fn + {pick_name} -> {dst} (saving will update this slot)."
+                        )),
+                );
+            }
+
+            composer = composer
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .items_end()
+                        .gap_3()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_size(px(10.5))
+                                        .text_color(rgb(theme::INK_MUTED))
+                                        .child("Hardware Chord"),
+                                )
+                                .child(category_badge("Fn + Key (MCU Fixed)", true, true)),
+                        )
+                        .child(self.render_dropdown(
+                            DropdownId::HotkeyTrigger,
+                            Some("Trigger Key (or click matrix)"),
+                            trigger_label,
+                            None,
+                            None,
+                            175.0,
+                            trigger_choices,
+                            move |this, idx, _| {
+                                if let Ok(st) = &mut this.conn {
+                                    st.draft_rule_key = trigger_indices_for_cb[idx];
+                                }
+                            },
+                            cx,
+                        ))
+                        .child(self.render_dropdown(
+                            DropdownId::HotkeyVirtualKey,
+                            Some("Target USB HID Key"),
+                            current_vk.label(),
+                            None,
+                            Some(MaterialIcon::Memory),
+                            185.0,
+                            vk_choices,
+                            move |this, idx, _| {
+                                if let Ok(st) = &mut this.conn {
+                                    st.draft_virtual_key = fw_vks_for_cb[idx];
+                                }
+                            },
+                            cx,
+                        ))
+                        .child(self.render_dropdown(
+                            DropdownId::HotkeyArrowKb,
+                            Some("Quick 4-Key Preset"),
+                            "Flash Arrows -> KB",
+                            None,
+                            Some(MaterialIcon::Memory),
+                            195.0,
+                            arrow_choices,
+                            |this, idx, _| {
+                                let preset = ARROW_CLUSTER_OPTIONS[idx].0;
+                                if let Ok(st) = &mut this.conn {
+                                    match st.save_arrow_cluster_to_keyboard(preset) {
+                                        Ok(msg) => this.status_line = msg,
+                                        Err(e) => this.status_line = e,
+                                    }
+                                }
+                            },
+                            cx,
+                        )),
+                )
+                .child(
+                    div().flex().flex_row().flex_wrap().gap_2().child(
+                        icon_btn(
+                            "hk-save-kb-btn",
+                            Some(MaterialIcon::Memory),
+                            format!(
+                                "Write Fn + {pick_name} -> {} to Firmware Flash",
+                                current_vk.label()
+                            ),
+                            ButtonTone::Warn { active: true },
+                        )
+                        .border_color(rgb(theme::FW_AMBER_BORDER))
+                        .text_color(rgb(theme::FW_AMBER_INK))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Ok(st) = &mut this.conn {
+                                st.set_keymap_draft_category(KeymapCategory::FirmwareFnFlash);
+                                match st.save_draft_to_keyboard_fn() {
+                                    Ok(msg) => this.status_line = msg,
+                                    Err(e) => this.status_line = e,
+                                }
+                            }
+                            cx.notify();
+                        })),
+                    ),
+                );
+            return composer;
+        }
+
+        // Daemon Memory Composer
+        let current_mod_label = HOTKEY_MODIFIER_OPTIONS
+            .iter()
+            .find(|(m, _)| *m == dm_mod)
+            .map_or_else(
+                || {
+                    dm_mod
+                        .and_then(keymap::by_index)
+                        .map_or("None (Single Key)".into(), |k| k.name.to_string())
+                },
+                |(_, lbl)| (*lbl).to_string(),
+            );
+        let mod_choices: Vec<DropdownChoice> = HOTKEY_MODIFIER_OPTIONS
+            .iter()
+            .map(|&(m, lbl)| DropdownChoice {
+                label: lbl.into(),
+                swatch: None,
+                icon: None,
+                selected: dm_mod == m,
+            })
+            .collect();
+        let dm_arrow_mod_idx = state.daemon_arrow_modifier();
+        let dm_arrow_mod_name = keymap::by_index(dm_arrow_mod_idx).map_or("Caps", |k| k.name);
+        let dm_arrow_choices: Vec<DropdownChoice> = ARROW_CLUSTER_OPTIONS
+            .iter()
+            .map(|&(preset, _)| {
+                let keys_lbl = match preset {
+                    ArrowClusterPreset::Rdfg => "R/D/F/G",
+                    ArrowClusterPreset::Tfgh => "T/F/G/H",
+                    ArrowClusterPreset::Wasd => "W/A/S/D",
+                };
+                DropdownChoice {
+                    label: format!("{dm_arrow_mod_name} + {keys_lbl} Arrows").into(),
+                    swatch: None,
+                    icon: Some(MaterialIcon::Bolt),
+                    selected: false,
+                }
+            })
+            .collect();
         let action_choices: Vec<DropdownChoice> = ShortcutActionPreset::ALL
             .iter()
             .map(|&p| DropdownChoice {
@@ -3441,7 +3861,6 @@ impl ReaulaGui {
                 selected: state.draft_rule_preset == p,
             })
             .collect();
-
         let vk_choices: Vec<DropdownChoice> = VirtualKey::ALL
             .iter()
             .map(|&vk| DropdownChoice {
@@ -3452,15 +3871,17 @@ impl ReaulaGui {
             })
             .collect();
 
-        let trigger_indices_for_cb = trigger_indices.clone();
-        let mut composer = card_box(
-            format!(
-                "Compose Keybind / Fn Function — Gesture: {gesture_preview} (>= {:.2} mm)",
-                state.draft_rule_depth_mm
-            ),
-            Some(&format!("{} rule(s) active", state.shortcut_rules.len())),
-        )
-        .child(
+        composer = composer.child(
+            recessed_well()
+                .p_2p5()
+                .bg(rgb(theme::DM_AQUA_BG))
+                .border_color(rgb(theme::DM_AQUA_DIM_BORDER))
+                .text_xs()
+                .text_color(rgb(theme::DM_AQUA_INK))
+                .child("Daemon Host Memory Scope: Evaluates analog mm depth inside `reaulad`, protects chords via `EVIOCGRAB`, supports Media/Profiles/RGB/Shell, and lights physical keys Aqua Blue (#00D7FF). `Fn` (#122) is reserved for Firmware [FW] Flash to prevent conflicts."),
+        );
+
+        composer = composer.child(
             div()
                 .flex()
                 .flex_row()
@@ -3469,11 +3890,11 @@ impl ReaulaGui {
                 .gap_3()
                 .child(self.render_dropdown(
                     DropdownId::HotkeyModifier,
-                    Some("Modifier Key"),
+                    Some("Modifier Key (Non-Fn)"),
                     current_mod_label,
                     None,
                     None,
-                    160.0,
+                    165.0,
                     mod_choices,
                     |this, idx, _| {
                         if let Ok(st) = &mut this.conn {
@@ -3499,15 +3920,19 @@ impl ReaulaGui {
                 ))
                 .child(self.render_dropdown(
                     DropdownId::HotkeyAction,
-                    Some("Action Preset"),
+                    Some("Daemon Action Preset"),
                     state.draft_rule_preset.label(),
                     None,
                     Some(MaterialIcon::Bolt),
                     200.0,
                     action_choices,
                     |this, idx, _| {
+                        let preset = ShortcutActionPreset::ALL[idx];
                         if let Ok(st) = &mut this.conn {
-                            st.draft_rule_preset = ShortcutActionPreset::ALL[idx];
+                            st.draft_rule_preset = preset;
+                        }
+                        if preset == ShortcutActionPreset::RunCommand {
+                            this.focus_cmd_next_frame = true;
                         }
                     },
                     cx,
@@ -3517,7 +3942,7 @@ impl ReaulaGui {
                     |d| {
                         d.child(self.render_dropdown(
                             DropdownId::HotkeyVirtualKey,
-                            Some("Target OS Key"),
+                            Some("Target OS / Media Key"),
                             state.draft_virtual_key.label(),
                             None,
                             None,
@@ -3577,123 +4002,398 @@ impl ReaulaGui {
                                     },
                                 ))),
                         ),
-                ),
+                )
+                .child(self.render_dropdown(
+                    DropdownId::HotkeyArrowDaemon,
+                    Some("Quick 4-Key Preset"),
+                    "Add Arrows -> Daemon",
+                    None,
+                    Some(MaterialIcon::Bolt),
+                    195.0,
+                    dm_arrow_choices,
+                    |this, idx, _| {
+                        let preset = ARROW_CLUSTER_OPTIONS[idx].0;
+                        if let Ok(st) = &mut this.conn {
+                            let label = st.add_daemon_arrow_cluster(preset);
+                            match st.sync_shortcuts() {
+                                Ok(()) => {
+                                    this.status_line = format!(
+                                        "Memorized {label} to [DM] Daemon layer (Key-Leak Guard suppresses raw letters)!"
+                                    );
+                                }
+                                Err(e) => this.status_line = e,
+                            }
+                        }
+                    },
+                    cx,
+                )),
         );
 
         if state.draft_rule_preset == ShortcutActionPreset::RunCommand {
-            composer =
-                composer.child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .id("hk-cmd-box")
-                                .flex_1()
-                                .p_2p5()
-                                .rounded_md()
-                                .bg(rgb(theme::SHADE_DEEP))
-                                .border_1()
-                                .border_color(rgb(theme::BORDER_FOCUS))
-                                .track_focus(&self.cmd_focus)
-                                .on_click(cx.listener(|this, _, window, cx| {
+            let cmd_focused = self.cmd_focus.is_focused(window);
+            let cmd_focus_for_ime = self.cmd_focus.clone();
+            let view_entity = cx.entity().clone();
+            let cmd_display = if state.draft_rule_command.is_empty() {
+                if cmd_focused {
+                    "$ |".to_string()
+                } else {
+                    "$ (click here to type a shell command)".to_string()
+                }
+            } else if cmd_focused {
+                format!("$ {}|", state.draft_rule_command)
+            } else {
+                format!("$ {}", state.draft_rule_command)
+            };
+
+            composer = composer.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id("hk-cmd-box")
+                            .relative()
+                            .flex_1()
+                            .min_w(px(260.0))
+                            .p_2p5()
+                            .px_3()
+                            .rounded_md()
+                            .bg(rgb(if cmd_focused {
+                                0x0c1b2e
+                            } else {
+                                theme::SHADE_DEEP
+                            }))
+                            .border_1()
+                            .border_color(rgb(if cmd_focused {
+                                theme::DM_AQUA_BORDER
+                            } else {
+                                theme::BORDER_MATTE
+                            }))
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .justify_between()
+                            .gap_2()
+                            .cursor_text()
+                            .tab_stop(true)
+                            .track_focus(&self.cmd_focus)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    this.open_dropdown = None;
                                     window.focus(&this.cmd_focus);
                                     cx.notify();
-                                }))
-                                .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {
-                                    if let Ok(st) = &mut this.conn {
-                                        match ev.keystroke.key.as_str() {
-                                            "backspace" => {
-                                                st.draft_rule_command.pop();
-                                            }
-                                            "space" => {
-                                                st.draft_rule_command.push(' ');
-                                            }
-                                            _ => {
-                                                if let Some(ch) = &ev.keystroke.key_char {
-                                                    st.draft_rule_command.push_str(ch);
-                                                }
+                                }),
+                            )
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_dropdown = None;
+                                window.focus(&this.cmd_focus);
+                                cx.notify();
+                            }))
+                            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                                if !this.cmd_focus.is_focused(window) {
+                                    return;
+                                }
+                                let mods = ev.keystroke.modifiers;
+                                let Ok(st) = &mut this.conn else {
+                                    return;
+                                };
+                                let mut handled = true;
+                                if mods.control && !mods.alt {
+                                    match ev.keystroke.key.as_str() {
+                                        "v" | "V" => {
+                                            if let Some(clip) = cx.read_from_clipboard()
+                                                && let Some(txt) = clip.text()
+                                            {
+                                                st.draft_rule_command
+                                                    .push_str(&crate::sanitize_command_paste(&txt));
                                             }
                                         }
-                                        cx.notify();
+                                        "c" | "C" => {
+                                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                                st.draft_rule_command.clone(),
+                                            ));
+                                        }
+                                        "u" | "U" => {
+                                            st.draft_rule_command.clear();
+                                        }
+                                        "backspace" => {
+                                            let trimmed = st.draft_rule_command.trim_end();
+                                            if let Some(pos) = trimmed.rfind(char::is_whitespace) {
+                                                st.draft_rule_command.truncate(pos + 1);
+                                            } else {
+                                                st.draft_rule_command.clear();
+                                            }
+                                        }
+                                        _ => handled = false,
                                     }
-                                }))
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(rgb(theme::INK_PRIMARY))
-                                        .child(format!("$ {}", state.draft_rule_command)),
-                                ),
-                        )
-                        .child(secondary_btn("hk-cmd-sample1", "Notify Sample").on_click(
-                            cx.listener(|this, _, _, cx| {
+                                } else {
+                                    match ev.keystroke.key.as_str() {
+                                        "backspace" | "delete" => {
+                                            st.draft_rule_command.pop();
+                                        }
+                                        "enter" | "escape" => {
+                                            window.focus(&this.root_focus);
+                                        }
+                                        "space" => {
+                                            st.draft_rule_command.push(' ');
+                                        }
+                                        _ if !mods.control && !mods.alt && !mods.platform => {
+                                            if let Some(ch) = &ev.keystroke.key_char {
+                                                st.draft_rule_command
+                                                    .push_str(&crate::sanitize_command_paste(ch));
+                                            } else if ev.keystroke.key.chars().count() == 1 {
+                                                let ch = if mods.shift {
+                                                    ev.keystroke.key.to_uppercase()
+                                                } else {
+                                                    ev.keystroke.key.clone()
+                                                };
+                                                st.draft_rule_command.push_str(&ch);
+                                            } else {
+                                                handled = false;
+                                            }
+                                        }
+                                        _ => handled = false,
+                                    }
+                                }
+                                if handled {
+                                    cx.stop_propagation();
+                                    cx.notify();
+                                }
+                            }))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_xs()
+                                    .text_color(rgb(
+                                        if state.draft_rule_command.is_empty() && !cmd_focused {
+                                            theme::INK_MUTED
+                                        } else {
+                                            theme::INK_PRIMARY
+                                        },
+                                    ))
+                                    .child(cmd_display),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.0))
+                                    .text_color(rgb(if cmd_focused {
+                                        theme::DM_AQUA_INK
+                                    } else {
+                                        theme::INK_MUTED
+                                    }))
+                                    .whitespace_nowrap()
+                                    .child(if cmd_focused {
+                                        "TYPING · Ctrl+V Paste · Enter Done"
+                                    } else {
+                                        "Click to type"
+                                    }),
+                            )
+                            .child(
+                                canvas(
+                                    |_, _, _| (),
+                                    move |bounds, (), window, cx| {
+                                        if cmd_focused {
+                                            window.handle_input(
+                                                &cmd_focus_for_ime,
+                                                ElementInputHandler::new(
+                                                    bounds,
+                                                    view_entity.clone(),
+                                                ),
+                                                cx,
+                                            );
+                                        }
+                                    },
+                                )
+                                .absolute()
+                                .inset_0(),
+                            ),
+                    )
+                    .child(
+                        secondary_btn("hk-cmd-sample1", "Notify Sample").on_click(cx.listener(
+                            |this, _, _, cx| {
                                 if let Ok(st) = &mut this.conn {
                                     st.draft_rule_command =
                                         "notify-send 'Reaula WIN 60 HE' 'Hotkey triggered'".into();
                                 }
                                 cx.notify();
-                            }),
+                            },
                         )),
-                );
+                    ),
+            );
         }
 
-        composer = composer.child(
+        if let Some(eid) = state.editing_daemon_rule_id {
+            composer = composer.child(
+                recessed_well()
+                    .p_2()
+                    .px_3()
+                    .border_color(rgb(theme::DM_AQUA_BORDER))
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_2()
+                            .child(category_badge(format!("EDITING #{eid}"), false, true))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(theme::INK_PRIMARY))
+                                    .child(format!("Editing keyboard rule for #{eid}.")),
+                            ),
+                    )
+                    .child(
+                        secondary_btn("hk-cancel-edit", "Cancel Edit (New Rule)").on_click(
+                            cx.listener(|this, _, _, cx| {
+                                if let Ok(st) = &mut this.conn {
+                                    st.cancel_daemon_rule_edit();
+                                    this.status_line =
+                                        "Exited edit mode; composer ready for a new rule.".into();
+                                }
+                                cx.notify();
+                            }),
+                        ),
+                    ),
+            );
+        }
+
+        if let Some(conflict) = state.conflicting_daemon_rule_for_draft() {
+            let cid = conflict.id;
+            let conflict_clone = conflict.clone();
+            let conflict_name = conflict.name.clone();
+            composer = composer.child(
+                recessed_well()
+                    .p_2p5()
+                    .border_color(rgb(theme::FW_AMBER_BORDER))
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(220.0))
+                            .text_xs()
+                            .text_color(rgb(theme::FW_AMBER_INK))
+                            .child(format!(
+                                "Duplicate Gesture Check: Rule #{cid} ({conflict_name}) already owns {gesture_preview}. Edit #{cid} or replace it below so stale duplicates are not created."
+                            )),
+                    )
+                    .child(
+                        icon_btn(
+                            ("hk-conflict-load", cid as usize),
+                            Some(MaterialIcon::Tune),
+                            format!("Load #{cid} to Edit"),
+                            ButtonTone::Secondary,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Ok(st) = &mut this.conn {
+                                st.load_daemon_rule_into_draft(&conflict_clone);
+                                this.status_line =
+                                    format!("Loaded existing [DM] rule #{cid} into Composer.");
+                            }
+                            cx.notify();
+                        })),
+                    ),
+            );
+        }
+
+        let empty_cmd = state.draft_rule_preset == ShortcutActionPreset::RunCommand
+            && state.draft_rule_command.trim().is_empty();
+        let conflict_id = state.conflicting_daemon_rule_for_draft().map(|r| r.id);
+        let save_label = if let Some(eid) = state.editing_daemon_rule_id {
+            format!("Update [DM] Rule #{eid} ({gesture_preview})")
+        } else {
+            format!("Add {gesture_preview} to Daemon Keymap Layer")
+        };
+
+        composer.child(
             div()
                 .flex()
                 .flex_row()
                 .flex_wrap()
+                .items_center()
                 .gap_2()
-                .child(
-                    icon_btn(
-                        "hk-save-kb-btn",
-                        Some(MaterialIcon::Memory),
-                        "Save Fn Rule to Keyboard Flash (cmd 0x18)",
-                        ButtonTone::Primary,
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        if let Ok(st) = &mut this.conn {
-                            match st.save_draft_to_keyboard_fn() {
-                                Ok(msg) => this.status_line = msg,
-                                Err(e) => this.status_line = e,
-                            }
-                        }
-                        cx.notify();
-                    })),
-                )
-                .child(
-                    icon_btn(
-                        "hk-add-btn",
-                        Some(MaterialIcon::Save),
-                        "+ Add Rule to Daemon Backup (uinput + Key-Leak Guard)",
-                        ButtonTone::Secondary,
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        if let Ok(st) = &mut this.conn {
-                            let rule = st.build_draft_shortcut_rule();
-                            st.shortcut_rules.push(rule);
-                            st.shortcut_watcher_active = true;
-                            match st.sync_shortcuts() {
-                                Ok(()) => {
-                                    this.status_line =
-                                        "Added hotkey rule to reaulad backup (key-leak guard enabled).".into();
+                .when(!empty_cmd && conflict_id.is_none(), |row| {
+                    row.child(
+                        icon_btn(
+                            "hk-add-btn",
+                            Some(MaterialIcon::Bolt),
+                            save_label.clone(),
+                            ButtonTone::Primary,
+                        )
+                        .border_color(rgb(theme::DM_AQUA_BORDER))
+                        .text_color(rgb(theme::DM_AQUA_INK))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Ok(st) = &mut this.conn {
+                                match st.commit_draft_daemon_rule(false) {
+                                    Ok(msg) => this.status_line = msg,
+                                    Err(e) => this.status_line = e,
                                 }
-                                Err(e) => this.status_line = e,
                             }
-                        }
-                        cx.notify();
-                    })),
-                ),
-        );
+                            cx.notify();
+                        })),
+                    )
+                })
+                .when_some(conflict_id, |row, cid| {
+                    row.child(
+                        icon_btn(
+                            "hk-replace-btn",
+                            Some(MaterialIcon::Bolt),
+                            if let Some(eid) = state.editing_daemon_rule_id {
+                                format!("Update #{eid} & Replace Conflicting #{cid}")
+                            } else {
+                                format!("Replace Existing Rule #{cid} ({gesture_preview})")
+                            },
+                            ButtonTone::Warn { active: true },
+                        )
+                        .border_color(rgb(theme::FW_AMBER_BORDER))
+                        .text_color(rgb(theme::FW_AMBER_INK))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Ok(st) = &mut this.conn {
+                                match st.commit_draft_daemon_rule(true) {
+                                    Ok(msg) => this.status_line = msg,
+                                    Err(e) => this.status_line = e,
+                                }
+                            }
+                            cx.notify();
+                        })),
+                    )
+                })
+                .when(empty_cmd, |row| {
+                    row.child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(theme::INK_WARN))
+                            .child("Enter a shell command above before saving."),
+                    )
+                }),
+        )
+    }
 
-        let mut fn_flash_card = card_box(
+    fn render_hotkey_rule_columns(&self, state: &ConnectedState, cx: &mut Context<Self>) -> Div {
+        let mut fw_card = card_box(
             format!(
-                "Onboard Hardware Fn Keymap (Stored in WIN 60 HE Flash — {} slot(s))",
+                "[FW] Firmware-Level Keymaps ({} slot(s))",
                 state.keyboard_fn_map.len()
             ),
-            Some("Persists inside keyboard flash without daemon; hardware natively blocks base letters"),
+            Some("Stored in WIN 60 HE flash (`cmd 0x18`) · Active without reaulad · Hardware blocks base key"),
         )
+        .flex_1()
+        .min_w(px(360.0))
+        .border_color(rgb(theme::FW_AMBER_DIM_BORDER))
         .child(
             div()
                 .flex()
@@ -3704,14 +4404,15 @@ impl ReaulaGui {
                     icon_btn(
                         "hk-kb-refresh",
                         Some(MaterialIcon::Refresh),
-                        "Refresh from KB",
+                        "Refresh Flash",
                         ButtonTone::Secondary,
                     )
                     .on_click(cx.listener(|this, _, _, cx| {
                         if let Ok(st) = &mut this.conn {
                             match st.refresh_keyboard_fn_map() {
                                 Ok(()) => {
-                                    this.status_line = "Refreshed onboard Fn keymap from keyboard.".into();
+                                    this.status_line =
+                                        "Refreshed [FW] onboard Fn keymap from keyboard flash.".into();
                                 }
                                 Err(e) => this.status_line = e,
                             }
@@ -3723,14 +4424,15 @@ impl ReaulaGui {
                     icon_btn(
                         "hk-kb-reset",
                         Some(MaterialIcon::DeleteOutline),
-                        "Reset All KB Fn Flash",
+                        "Reset All FW Flash",
                         ButtonTone::Danger,
                     )
                     .on_click(cx.listener(|this, _, _, cx| {
                         if let Ok(st) = &mut this.conn {
                             match st.reset_keyboard_fn_map() {
                                 Ok(()) => {
-                                    this.status_line = "Cleared all custom Fn bindings in keyboard flash.".into();
+                                    this.status_line =
+                                        "Cleared all custom [FW] Fn bindings in keyboard flash.".into();
                                 }
                                 Err(e) => this.status_line = e,
                             }
@@ -3741,24 +4443,28 @@ impl ReaulaGui {
         );
 
         if state.keyboard_fn_map.is_empty() {
-            fn_flash_card = fn_flash_card.child(
+            fw_card = fw_card.child(
                 div()
                     .text_xs()
                     .text_color(rgb(theme::INK_MUTED))
-                    .child("Factory default Fn layer on keyboard flash (no custom overrides). Use 'Flash Arrows -> KB' above to save directly to WIN 60 HE."),
+                    .child("Factory default Fn layer on keyboard flash (no custom [FW] overrides). Switch Composer to Firmware Level above to flash Fn + Key slots."),
             );
         } else {
             for (&slot_idx, &target_hid) in &state.keyboard_fn_map {
                 let src_name = keymap::by_index(slot_idx).map_or("Key", |k| k.name);
                 let dst_name = keymap::usb_hid_name(target_hid);
-                fn_flash_card = fn_flash_card.child(
+                let shares_with_dm = state
+                    .shortcut_rules
+                    .iter()
+                    .any(|r| r.enabled && r.trigger_key == slot_idx);
+                fw_card = fw_card.child(
                     div()
                         .p_2p5()
                         .px_3()
                         .rounded_lg()
-                        .bg(rgb(theme::SHADE_REGAL))
+                        .bg(rgb(theme::FW_AMBER_BG))
                         .border_1()
-                        .border_color(rgb(theme::BORDER_REGAL))
+                        .border_color(rgb(theme::FW_AMBER_DIM_BORDER))
                         .flex()
                         .flex_row()
                         .flex_wrap()
@@ -3768,57 +4474,144 @@ impl ReaulaGui {
                         .child(
                             div()
                                 .flex_1()
-                                .min_w(px(220.0))
-                                .text_xs()
-                                .text_color(rgb(theme::INK_PRIMARY))
-                                .child(format!(
-                                    "Fn + {src_name} (#{slot_idx}) -> {dst_name} (HID 0x{target_hid:02X})"
-                                )),
+                                .min_w(px(200.0))
+                                .flex()
+                                .flex_row()
+                                .flex_wrap()
+                                .items_center()
+                                .gap_2()
+                                .child(category_badge("FW · FLASH", true, false))
+                                .when(shares_with_dm, |row| {
+                                    row.child(category_badge("Shared w/ DM", false, false))
+                                })
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(theme::INK_PRIMARY))
+                                        .child(format!(
+                                            "Fn + {src_name} (#{slot_idx}) -> {dst_name} (HID 0x{target_hid:02X})"
+                                        )),
+                                ),
                         )
                         .child(
-                            icon_btn(
-                                ("hk-kb-clr", usize::from(slot_idx)),
-                                Some(MaterialIcon::DeleteOutline),
-                                "Clear",
-                                ButtonTone::Danger,
-                            )
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if let Ok(st) = &mut this.conn {
-                                    match st.clear_keyboard_fn_slot(slot_idx) {
-                                        Ok(()) => {
-                                            this.status_line = format!("Cleared Fn + {src_name} from KB flash.");
+                            div()
+                                .flex()
+                                .flex_row()
+                                .gap_1p5()
+                                .child(
+                                    icon_btn(
+                                        ("hk-kb-edit", usize::from(slot_idx)),
+                                        Some(MaterialIcon::Tune),
+                                        "Edit",
+                                        ButtonTone::Secondary,
+                                    )
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if let Ok(st) = &mut this.conn {
+                                            st.load_firmware_slot_into_draft(slot_idx, target_hid);
+                                            this.status_line = format!(
+                                                "Loaded [FW] Fn + {src_name} into Firmware Composer."
+                                            );
                                         }
-                                        Err(e) => this.status_line = e,
-                                    }
-                                }
-                                cx.notify();
-                            })),
+                                        cx.notify();
+                                    })),
+                                )
+                                .child(
+                                    icon_btn(
+                                        ("hk-kb-clr", usize::from(slot_idx)),
+                                        Some(MaterialIcon::DeleteOutline),
+                                        "Clear",
+                                        ButtonTone::Danger,
+                                    )
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if let Ok(st) = &mut this.conn {
+                                            match st.clear_keyboard_fn_slot(slot_idx) {
+                                                Ok(()) => {
+                                                    this.status_line = format!(
+                                                        "Cleared [FW] Fn + {src_name} from KB flash."
+                                                    );
+                                                }
+                                                Err(e) => this.status_line = e,
+                                            }
+                                        }
+                                        cx.notify();
+                                    })),
+                                ),
                         ),
                 );
             }
         }
 
-        let mut rules_card = card_box(
-            "Daemon Backup Shortcut Rules (EVIOCGRAB Key-Leak Protected)",
-            None,
+        let mut dm_card = card_box(
+            format!(
+                "[DM] Daemon-Level Keymaps ({} rule(s))",
+                state.shortcut_rules.len()
+            ),
+            Some("Evaluated in reaulad · Aqua Blue (#00D7FF) LED indicator · EVIOCGRAB Key-Leak Protected"),
+        )
+        .flex_1()
+        .min_w(px(360.0))
+        .border_color(rgb(theme::DM_AQUA_DIM_BORDER))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .gap_2()
+                .child(
+                    icon_btn(
+                        "hk-sync",
+                        Some(MaterialIcon::Save),
+                        "Save Daemon Rules to Disk",
+                        ButtonTone::Secondary,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if let Ok(st) = &mut this.conn {
+                            match st.sync_shortcuts() {
+                                Ok(()) => {
+                                    this.status_line =
+                                        "Memorized [DM] Daemon keymaps to reaulad & disk.".into();
+                                }
+                                Err(e) => this.status_line = e,
+                            }
+                        }
+                        cx.notify();
+                    })),
+                ),
         );
+
         if state.shortcut_rules.is_empty() {
-            rules_card = rules_card.child(
+            dm_card = dm_card.child(
                 div()
                     .text_xs()
                     .text_color(rgb(theme::INK_MUTED))
-                    .child("No hotkey rules loaded in reaulad yet. Add one above."),
+                    .child("No [DM] Daemon rules configured yet. Switch Composer to Daemon Level above to add depth/chord/media/command rules."),
             );
         } else {
             for rule in &state.shortcut_rules {
                 let r_id = rule.id;
                 let gesture = rule.gesture_label();
-                rules_card = rules_card.child(
+                let uses_reserved_fn = rule.modifier_key == Some(keymap::idx::FN)
+                    || rule.trigger_key == keymap::idx::FN;
+                let fw_other_chord =
+                    !uses_reserved_fn && state.keyboard_fn_map.contains_key(&rule.trigger_key);
+                let is_editing_this = state.editing_daemon_rule_id == Some(r_id);
+                let rule_clone = rule.clone();
+
+                dm_card = dm_card.child(
                     recessed_well()
                         .p_2p5()
                         .px_3()
-                        .border_color(rgb(if rule.enabled {
-                            theme::BORDER_REGAL
+                        .bg(rgb(if is_editing_this {
+                            theme::DM_AQUA_ACTIVE
+                        } else if rule.enabled {
+                            theme::DM_AQUA_BG
+                        } else {
+                            theme::SHADE_DEEP
+                        }))
+                        .border_color(rgb(if is_editing_this {
+                            theme::DM_AQUA_BORDER
+                        } else if rule.enabled {
+                            theme::DM_AQUA_DIM_BORDER
                         } else {
                             theme::BORDER_SUBTLE
                         }))
@@ -3831,10 +4624,44 @@ impl ReaulaGui {
                         .child(
                             div()
                                 .flex_1()
-                                .min_w(px(240.0))
+                                .min_w(px(220.0))
                                 .flex()
                                 .flex_col()
-                                .gap_0p5()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .flex_wrap()
+                                        .items_center()
+                                        .gap_1p5()
+                                        .child(category_badge("DM · HOST", false, rule.enabled))
+                                        .when(is_editing_this, |row| {
+                                            row.child(category_badge("EDITING", false, true))
+                                        })
+                                        .child(
+                                            div()
+                                                .px_1p5()
+                                                .py_0p5()
+                                                .rounded_sm()
+                                                .bg(rgb(theme::SHADE_BASE))
+                                                .border_1()
+                                                .border_color(rgb(theme::BORDER_MATTE))
+                                                .text_size(px(10.0))
+                                                .text_color(rgb(theme::INK_SECONDARY))
+                                                .child(action_kind_tag(&rule.action)),
+                                        )
+                                        .when(uses_reserved_fn, |row| {
+                                            row.child(category_badge(
+                                                "Reserved Fn (Remove)",
+                                                true,
+                                                false,
+                                            ))
+                                        })
+                                        .when(fw_other_chord, |row| {
+                                            row.child(category_badge("Coexists w/ FW", true, false))
+                                        }),
+                                )
                                 .child(
                                     div()
                                         .w_full()
@@ -3859,7 +4686,26 @@ impl ReaulaGui {
                                 .flex()
                                 .flex_row()
                                 .flex_wrap()
-                                .gap_2()
+                                .gap_1p5()
+                                .child(
+                                    icon_btn(
+                                        ("hk-edit", r_id as usize),
+                                        Some(MaterialIcon::Tune),
+                                        "Edit",
+                                        ButtonTone::Secondary,
+                                    )
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| {
+                                            if let Ok(st) = &mut this.conn {
+                                                st.load_daemon_rule_into_draft(&rule_clone);
+                                                this.status_line = format!(
+                                                    "Loaded [DM] rule #{r_id} into Daemon Composer."
+                                                );
+                                            }
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
                                 .child(
                                     pill(
                                         ("hk-en", r_id as usize),
@@ -3895,9 +4741,9 @@ impl ReaulaGui {
                                                 match st.trigger_shortcut_rule(r_id) {
                                                     Ok(log) => {
                                                         this.status_line = format!(
-                                                            "Triggered #{}: {}",
+                                                            "Triggered [DM] #{}: {}",
                                                             log.rule_id, log.message
-                                                        )
+                                                        );
                                                     }
                                                     Err(e) => this.status_line = e,
                                                 }
@@ -3917,6 +4763,9 @@ impl ReaulaGui {
                                         move |this, _, _, cx| {
                                             if let Ok(st) = &mut this.conn {
                                                 st.shortcut_rules.retain(|r| r.id != r_id);
+                                                if st.editing_daemon_rule_id == Some(r_id) {
+                                                    st.editing_daemon_rule_id = None;
+                                                }
                                                 let _ = st.sync_shortcuts();
                                             }
                                             cx.notify();
@@ -3928,14 +4777,26 @@ impl ReaulaGui {
             }
         }
 
-        let mut logs_card = card_box("Daemon Trigger History", None);
+        div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .gap_4()
+            .child(fw_card)
+            .child(dm_card)
+    }
+
+    fn render_hotkey_logs(&self, state: &ConnectedState) -> Div {
+        let mut logs_card = card_box(
+            "[DM] Daemon Trigger & Execution Log",
+            Some(
+                "Hardware [FW] Fn remaps execute directly inside WIN 60 HE silicon and never appear here",
+            ),
+        );
         if state.shortcut_logs.is_empty() {
-            logs_card = logs_card.child(
-                div()
-                    .text_xs()
-                    .text_color(rgb(theme::INK_MUTED))
-                    .child("No triggers recorded yet. Click Test Fire or press your trigger key."),
-            );
+            logs_card = logs_card.child(div().text_xs().text_color(rgb(theme::INK_MUTED)).child(
+                "No [DM] triggers recorded yet. Click Test Fire or press your Daemon trigger key.",
+            ));
         } else {
             for log in state.shortcut_logs.iter().take(8) {
                 logs_card = logs_card.child(
@@ -3955,16 +4816,7 @@ impl ReaulaGui {
                 );
             }
         }
-
-        div()
-            .flex()
-            .flex_col()
-            .gap_4()
-            .child(top_bar)
-            .child(composer)
-            .child(fn_flash_card)
-            .child(rules_card)
-            .child(logs_card)
+        logs_card
     }
 
     // -----------------------------------------------------------------------
@@ -4391,7 +5243,10 @@ impl ReaulaGui {
                     .gap_1p5()
                     .child(pill(
                         "dx-focused-sw",
-                        format!("{} (#{}) · {}", snap.key_name, snap.key_index, snap.switch_label),
+                        format!(
+                            "{} (#{}) · {}",
+                            snap.key_name, snap.key_index, snap.switch_label
+                        ),
                         true,
                     ))
                     .child(
@@ -4561,6 +5416,7 @@ impl ReaulaGui {
                                 st.diag_switch_preset = None;
                                 this.dirty_switch_3d = true;
                             }
+                            cx.stop_propagation();
                             cx.notify();
                         }))
                         .child(img(frame.clone()).w_full().h_full())
@@ -4619,7 +5475,11 @@ impl ReaulaGui {
             .gap_2()
             .child(
                 stat_tile(
-                    if snap.sweeping { "Sweep Depth" } else { "Live Depth" },
+                    if snap.sweeping {
+                        "Sweep Depth"
+                    } else {
+                        "Live Depth"
+                    },
                     format!("{:.2} / {:.2} mm", snap.travel_mm, snap.max_mm),
                     if snap.triggered {
                         theme::INK_OK
@@ -4648,10 +5508,7 @@ impl ReaulaGui {
             .child(
                 stat_tile(
                     "Actuation / Peak",
-                    format!(
-                        "{:.2} mm · Pk {:.2} mm",
-                        snap.actuation_mm, snap.peak_mm
-                    ),
+                    format!("{:.2} mm · Pk {:.2} mm", snap.actuation_mm, snap.peak_mm),
                     theme::INK_SECONDARY,
                 )
                 .flex_1(),
@@ -4662,10 +5519,7 @@ impl ReaulaGui {
                     if snap.rapid_trigger {
                         format!(
                             "RT +{:.2}/-{:.2} · DB {:.2}/{:.2}",
-                            snap.rt_press_mm,
-                            snap.rt_release_mm,
-                            snap.db_top_mm,
-                            snap.db_bottom_mm
+                            snap.rt_press_mm, snap.rt_release_mm, snap.db_top_mm, snap.db_bottom_mm
                         )
                     } else {
                         format!("Fixed · DB {:.2}/{:.2}", snap.db_top_mm, snap.db_bottom_mm)

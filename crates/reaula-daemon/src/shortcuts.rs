@@ -1,11 +1,9 @@
 //! Daemon-owned shortcut watcher, evdev key-leak suppressor, and `/dev/uinput` injector.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fs::{self, Permissions};
 use std::io::{self, Write};
-use std::os::unix::fs::OpenOptionsExt;
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::process::CommandExt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -201,13 +199,17 @@ impl ShortcutEngine {
 
     pub(crate) fn set_rules(&mut self, rules: Vec<ShortcutRule>, watcher_active: bool) {
         self.release_all_virtual_keys();
-        let valid_ids: BTreeSet<u32> = rules
+        let sanitized: Vec<ShortcutRule> = rules
+            .into_iter()
+            .filter(|r| !rule_uses_reserved_fn(r))
+            .collect();
+        let valid_ids: BTreeSet<u32> = sanitized
             .iter()
             .filter(|r| watcher_active && r.enabled)
             .map(|r| r.id)
             .collect();
         self.latched_rules.retain(|id| valid_ids.contains(id));
-        self.rules = rules;
+        self.rules = sanitized;
         self.watcher_active = watcher_active;
         self.save_to_disk();
         self.sync_evdev();
@@ -225,14 +227,40 @@ impl ShortcutEngine {
             match fs::read(path) {
                 Ok(bytes) => match ipc::decode_persisted_shortcuts(&bytes) {
                     Ok(saved) => {
+                        let before = saved.rules.len();
+                        let mut seen_gestures = HashSet::new();
+                        let cleaned: Vec<ShortcutRule> = saved
+                            .rules
+                            .into_iter()
+                            .filter(|r| {
+                                if rule_uses_reserved_fn(r) {
+                                    eprintln!(
+                                        "ignoring legacy Fn daemon shortcut #{} ({}) — Fn is reserved for hardware Firmware Flash",
+                                        r.id, r.name
+                                    );
+                                    return false;
+                                }
+                                if !seen_gestures.insert((r.modifier_key, r.trigger_key)) {
+                                    eprintln!(
+                                        "ignoring duplicate daemon shortcut #{} ({}) for the same gesture",
+                                        r.id, r.name
+                                    );
+                                    return false;
+                                }
+                                true
+                            })
+                            .collect();
                         eprintln!(
                             "loaded {} memorized shortcut(s) (watcher={}) from {}",
-                            saved.rules.len(),
+                            cleaned.len(),
                             saved.watcher_active,
                             path.display()
                         );
-                        self.rules = saved.rules;
+                        self.rules = cleaned;
                         self.watcher_active = saved.watcher_active;
+                        if self.rules.len() != before {
+                            self.save_to_disk();
+                        }
                         self.sync_evdev();
                     }
                     Err(e) => {
@@ -526,6 +554,42 @@ impl ShortcutEngine {
     }
 }
 
+pub(crate) fn rule_uses_reserved_fn(rule: &ShortcutRule) -> bool {
+    rule.modifier_key == Some(keymap::idx::FN) || rule.trigger_key == keymap::idx::FN
+}
+
+pub(crate) fn validate_daemon_rules(rules: &[ShortcutRule]) -> Result<(), String> {
+    let mut seen_gestures: HashMap<(Option<u8>, u8), u32> = HashMap::new();
+    for rule in rules {
+        if rule_uses_reserved_fn(rule) {
+            return Err(format!(
+                "Fn key (slot #{}) is reserved for hardware Firmware Flash and cannot be used in Daemon shortcut '{}'",
+                keymap::idx::FN,
+                rule.name
+            ));
+        }
+        if let reaula_core::ipc::ShortcutAction::RunCommand { command } = &rule.action
+            && command.trim().is_empty()
+        {
+            return Err(format!(
+                "Daemon shortcut #{} ('{}') cannot have an empty shell command",
+                rule.id, rule.name
+            ));
+        }
+        if let Some(prev_id) = seen_gestures.insert((rule.modifier_key, rule.trigger_key), rule.id)
+        {
+            return Err(format!(
+                "Daemon shortcut #{} ('{}') duplicates gesture '{}' already bound to rule #{} — edit or replace the existing rule instead",
+                rule.id,
+                rule.name,
+                rule.gesture_label(),
+                prev_id
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn resolve_shortcuts_path(args_path: Option<&Path>, socket_path: &Path) -> Option<PathBuf> {
     if let Some(p) = args_path {
         return Some(p.to_path_buf());
@@ -534,6 +598,192 @@ pub(crate) fn resolve_shortcuts_path(args_path: Option<&Path>, socket_path: &Pat
         return Some(PathBuf::from(SYSTEM_SHORTCUTS_FILE));
     }
     socket_path.parent().map(|d| d.join("shortcuts.json"))
+}
+
+fn is_owned_dir(path: &Path, uid: u32) -> bool {
+    fs::symlink_metadata(path)
+        .is_ok_and(|m| m.file_type().is_dir() && m.uid() == uid)
+}
+
+fn is_owned_socket(path: &Path, uid: u32) -> bool {
+    fs::symlink_metadata(path)
+        .is_ok_and(|m| m.file_type().is_socket() && m.uid() == uid)
+}
+
+fn is_owned_regular_file(path: &Path, uid: u32) -> bool {
+    fs::symlink_metadata(path)
+        .is_ok_and(|m| m.file_type().is_file() && m.uid() == uid)
+}
+
+fn build_user_command_env(user: &ipc::UserPasswdRecord) -> BTreeMap<String, String> {
+    let mut env = BTreeMap::new();
+    let home_str = if user.home_dir.as_os_str().is_empty() {
+        format!("/home/{}", user.username)
+    } else {
+        user.home_dir.to_string_lossy().into_owned()
+    };
+
+    env.insert("HOME".into(), home_str.clone());
+    env.insert("USER".into(), user.username.clone());
+    env.insert("LOGNAME".into(), user.username.clone());
+    env.insert("SHELL".into(), user.shell.clone());
+
+    let mut path_parts: Vec<String> = Vec::new();
+    let push_path = |parts: &mut Vec<String>, p: String| {
+        if !p.is_empty() && !parts.contains(&p) {
+            parts.push(p);
+        }
+    };
+    push_path(&mut path_parts, format!("{home_str}/.local/bin"));
+    push_path(&mut path_parts, format!("{home_str}/.cargo/bin"));
+    if let Ok(existing) = std::env::var("PATH") {
+        for seg in existing.split(':') {
+            if !seg.is_empty() && !seg.starts_with("/root") {
+                push_path(&mut path_parts, seg.to_string());
+            }
+        }
+    }
+    for sys in ["/usr/local/bin", "/usr/bin", "/bin"] {
+        push_path(&mut path_parts, sys.to_string());
+    }
+    env.insert("PATH".into(), path_parts.join(":"));
+
+    for key in [
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LC_MESSAGES",
+        "TZ",
+        "XDG_CURRENT_DESKTOP",
+        "XDG_SESSION_DESKTOP",
+        "DESKTOP_SESSION",
+        "QT_QPA_PLATFORMTHEME",
+    ] {
+        if let Ok(val) = std::env::var(key)
+            && !val.trim().is_empty()
+            && !val.contains("/root")
+        {
+            env.insert(key.into(), val);
+        }
+    }
+
+    let runtime_dir = PathBuf::from(format!("/run/user/{}", user.uid));
+    if is_owned_dir(&runtime_dir, user.uid) {
+        let rt_str = runtime_dir.to_string_lossy().into_owned();
+        env.insert("XDG_RUNTIME_DIR".into(), rt_str);
+
+        let bus = runtime_dir.join("bus");
+        if is_owned_socket(&bus, user.uid) {
+            env.insert(
+                "DBUS_SESSION_BUS_ADDRESS".into(),
+                format!("unix:path={}", bus.display()),
+            );
+        }
+
+        let mut wayland_sockets: Vec<String> = Vec::new();
+        let mut xauth_candidates: Vec<PathBuf> = Vec::new();
+        if let Ok(entries) = fs::read_dir(&runtime_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let p = entry.path();
+                if name.starts_with("wayland-")
+                    && !name.ends_with(".lock")
+                    && is_owned_socket(&p, user.uid)
+                {
+                    wayland_sockets.push(name);
+                } else if name.starts_with("xauth") && is_owned_regular_file(&p, user.uid) {
+                    xauth_candidates.push(p);
+                }
+            }
+        }
+        wayland_sockets.sort();
+        if let Some(wl) = std::env::var("WAYLAND_DISPLAY")
+            .ok()
+            .filter(|w| wayland_sockets.contains(w))
+            .or_else(|| wayland_sockets.into_iter().next())
+        {
+            env.insert("WAYLAND_DISPLAY".into(), wl);
+            env.insert("XDG_SESSION_TYPE".into(), "wayland".into());
+        }
+
+        if let Some(xauth) = xauth_candidates.into_iter().next().or_else(|| {
+            let p = PathBuf::from(format!("{home_str}/.Xauthority"));
+            is_owned_regular_file(&p, user.uid).then_some(p)
+        }) {
+            env.insert("XAUTHORITY".into(), xauth.to_string_lossy().into_owned());
+        }
+    } else if let Some(xauth) = Some(PathBuf::from(format!("{home_str}/.Xauthority")))
+        .filter(|p| is_owned_regular_file(p, user.uid))
+    {
+        env.insert("XAUTHORITY".into(), xauth.to_string_lossy().into_owned());
+    }
+
+    if let Ok(disp) = std::env::var("DISPLAY")
+        && !disp.trim().is_empty()
+    {
+        env.insert("DISPLAY".into(), disp);
+    } else if let Ok(entries) = fs::read_dir("/tmp/.X11-unix") {
+        let mut xs: Vec<String> = entries
+            .flatten()
+            .filter_map(|e| {
+                let p = e.path();
+                let name = e.file_name().to_string_lossy().into_owned();
+                let num = name.strip_prefix('X')?;
+                is_owned_socket(&p, user.uid).then(|| format!(":{num}"))
+            })
+            .collect();
+        xs.sort();
+        if let Some(disp) = xs.into_iter().next() {
+            env.insert("DISPLAY".into(), disp);
+        }
+    }
+
+    env
+}
+
+fn try_launch_via_user_systemd(
+    trimmed_cmd: &str,
+    user: &ipc::UserPasswdRecord,
+    user_env: &BTreeMap<String, String>,
+) -> Option<String> {
+    let systemd_run = Path::new("/usr/bin/systemd-run");
+    let sys_private = PathBuf::from(format!("/run/user/{}/systemd/private", user.uid));
+    if !systemd_run.is_file() || !is_owned_socket(&sys_private, user.uid) {
+        return None;
+    }
+
+    let mut cmd = Command::new(systemd_run);
+    cmd.env_clear();
+    cmd.envs(user_env);
+    if !user.home_dir.as_os_str().is_empty() && user.home_dir.is_dir() {
+        cmd.current_dir(&user.home_dir);
+        cmd.arg("--working-directory").arg(&user.home_dir);
+    }
+    cmd.args([
+        "--user",
+        "--no-block",
+        "--collect",
+        "--quiet",
+        "--",
+        "/bin/sh",
+        "-c",
+    ])
+    .arg(trimmed_cmd)
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null());
+
+    if ipc::configure_user_command_credentials(&mut cmd, user, true).is_err() {
+        return None;
+    }
+
+    let status = cmd.status().ok()?;
+    status.success().then(|| {
+        format!(
+            "Launched natively via user systemd session as non-root uid={} ({})",
+            user.uid, user.username
+        )
+    })
 }
 
 pub(crate) fn spawn_user_command(command: &str, allowed_uids: &[u32]) -> Result<String, String> {
@@ -553,16 +803,30 @@ pub(crate) fn spawn_user_command(command: &str, allowed_uids: &[u32]) -> Result<
         ));
     }
 
+    let user = ipc::user_account_for_uid(target_uid).ok_or_else(|| {
+        format!("refusing to run command: missing /etc/passwd account for UID {target_uid}")
+    })?;
+    if me == 0 && (user.uid == 0 || user.gid == 0) {
+        return Err("refusing to spawn shortcut command with UID/GID 0".into());
+    }
+
+    let user_env = build_user_command_env(&user);
+    if let Some(native_msg) = try_launch_via_user_systemd(trimmed, &user, &user_env) {
+        return Ok(native_msg);
+    }
+
     let mut cmd = Command::new("/bin/sh");
+    cmd.env_clear();
+    cmd.envs(&user_env);
+    if !user.home_dir.as_os_str().is_empty() && user.home_dir.is_dir() {
+        cmd.current_dir(&user.home_dir);
+    }
     cmd.arg("-c")
         .arg(trimmed)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    if me == 0 {
-        let gid = ipc::primary_gid_for_uid(target_uid).unwrap_or(target_uid);
-        cmd.uid(target_uid).gid(gid);
-    }
+    ipc::configure_user_command_credentials(&mut cmd, &user, true)?;
 
     let mut child = cmd
         .spawn()
@@ -571,7 +835,10 @@ pub(crate) fn spawn_user_command(command: &str, allowed_uids: &[u32]) -> Result<
     thread::spawn(move || {
         let _ = child.wait();
     });
-    Ok(format!("Spawned pid={pid} as uid={target_uid}"))
+    Ok(format!(
+        "Spawned pid={pid} as non-root uid={} ({})",
+        user.uid, user.username
+    ))
 }
 
 #[cfg(test)]
@@ -582,7 +849,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shortcut_engine_rising_edge_hysteresis_and_fn_chord() {
+    fn shortcut_engine_rising_edge_hysteresis_and_chord() {
         let mut engine = ShortcutEngine::default();
         engine.set_rules(
             vec![
@@ -597,9 +864,9 @@ mod tests {
                 },
                 ShortcutRule {
                     id: 8,
-                    name: "Fn+T Up".into(),
+                    name: "Caps+T Up".into(),
                     enabled: true,
-                    modifier_key: Some(keymap::idx::FN),
+                    modifier_key: Some(keymap::idx::CAPS),
                     trigger_key: keymap::idx::T,
                     trigger_depth_mm: 1.5,
                     action: ShortcutAction::ActuationPreset {
@@ -641,7 +908,7 @@ mod tests {
         assert!(engine.evaluate_sample(&released_esc, 0.01).is_empty());
         assert_eq!(engine.evaluate_sample(&deep_esc, 0.01).len(), 1);
 
-        // Pressing T without Fn held must NOT fire the Fn+T chord.
+        // Pressing T without Caps held must NOT fire the Caps+T chord.
         let deep_t = LiveTravelSample {
             row: 2,
             col: 5,
@@ -650,33 +917,33 @@ mod tests {
         };
         assert!(engine.evaluate_sample(&deep_t, 0.01).is_empty());
 
-        // Hold Fn, release T, then press T -> fires Fn+T chord cleanly.
+        // Hold Caps, release T, then press T -> fires Caps+T chord cleanly.
         let released_t = LiveTravelSample {
             row: 2,
             col: 5,
             index: keymap::idx::T,
             travel_raw: 0,
         };
-        let hold_fn = LiveTravelSample {
-            row: 5,
-            col: 12,
-            index: keymap::idx::FN,
+        let hold_caps = LiveTravelSample {
+            row: 3,
+            col: 0,
+            index: keymap::idx::CAPS,
             travel_raw: 200,
         };
-        let release_fn = LiveTravelSample {
-            row: 5,
-            col: 12,
-            index: keymap::idx::FN,
+        let release_caps = LiveTravelSample {
+            row: 3,
+            col: 0,
+            index: keymap::idx::CAPS,
             travel_raw: 0,
         };
         let _ = engine.evaluate_sample(&released_t, 0.01);
-        let _ = engine.evaluate_sample(&hold_fn, 0.01);
+        let _ = engine.evaluate_sample(&hold_caps, 0.01);
         let fired = engine.evaluate_sample(&deep_t, 0.01);
         assert_eq!(fired.len(), 1);
         assert_eq!(fired[0].id, 8);
 
-        // Lifting Fn unlatches the chord even while T stays held.
-        let _ = engine.evaluate_sample(&release_fn, 0.01);
+        // Lifting Caps unlatches the chord even while T stays held.
+        let _ = engine.evaluate_sample(&release_caps, 0.01);
         assert!(!engine.latched_rules.contains(&8));
     }
 
@@ -687,9 +954,9 @@ mod tests {
             vec![
                 ShortcutRule {
                     id: 1,
-                    name: "Fn+R Up".into(),
+                    name: "Caps+R Up".into(),
                     enabled: true,
-                    modifier_key: Some(keymap::idx::FN),
+                    modifier_key: Some(keymap::idx::CAPS),
                     trigger_key: keymap::idx::R,
                     trigger_depth_mm: 1.5,
                     action: ShortcutAction::EmitKey {
@@ -698,9 +965,9 @@ mod tests {
                 },
                 ShortcutRule {
                     id: 2,
-                    name: "Fn+F Down".into(),
+                    name: "Caps+F Down".into(),
                     enabled: true,
-                    modifier_key: Some(keymap::idx::FN),
+                    modifier_key: Some(keymap::idx::CAPS),
                     trigger_key: keymap::idx::F,
                     trigger_depth_mm: 1.5,
                     action: ShortcutAction::EmitKey {
@@ -713,23 +980,23 @@ mod tests {
 
         assert!(engine.build_indicator_colors().is_none());
 
-        // Holding Fn illuminates Fn + all enabled daemon Fn+... mapped keys in Aqua Blue.
-        let hold_fn = LiveTravelSample {
-            row: 5,
-            col: 12,
-            index: keymap::idx::FN,
+        // Holding Caps illuminates Caps + all enabled daemon Caps+... mapped keys in Aqua Blue.
+        let hold_caps = LiveTravelSample {
+            row: 3,
+            col: 0,
+            index: keymap::idx::CAPS,
             travel_raw: 180,
         };
-        let _ = engine.evaluate_sample(&hold_fn, 0.01);
+        let _ = engine.evaluate_sample(&hold_caps, 0.01);
         let grid = engine
             .build_indicator_colors()
-            .expect("holding Fn should illuminate daemon indicator");
-        assert_eq!(grid[usize::from(keymap::idx::FN)], DAEMON_INDICATOR_AQUA_RGB);
+            .expect("holding Caps should illuminate daemon indicator");
+        assert_eq!(grid[usize::from(keymap::idx::CAPS)], DAEMON_INDICATOR_AQUA_RGB);
         assert_eq!(grid[usize::from(keymap::idx::R)], DAEMON_INDICATOR_AQUA_RGB);
         assert_eq!(grid[usize::from(keymap::idx::F)], DAEMON_INDICATOR_AQUA_RGB);
         assert_eq!(grid[usize::from(keymap::idx::ESC)], [0, 0, 0]);
 
-        // Latching Fn+R elevates R to the brighter electric Aqua flare.
+        // Latching Caps+R elevates R to the brighter electric Aqua flare.
         let press_r = LiveTravelSample {
             row: 2,
             col: 4,
@@ -749,6 +1016,69 @@ mod tests {
     }
 
     #[test]
+    fn rejects_and_strips_reserved_fn_rules() {
+        let fn_mod_rule = ShortcutRule {
+            id: 1,
+            name: "Fn+T".into(),
+            enabled: true,
+            modifier_key: Some(keymap::idx::FN),
+            trigger_key: keymap::idx::T,
+            trigger_depth_mm: 1.5,
+            action: ShortcutAction::ToggleLighting,
+        };
+        let fn_trig_rule = ShortcutRule {
+            id: 2,
+            name: "Tap Fn".into(),
+            enabled: true,
+            modifier_key: None,
+            trigger_key: keymap::idx::FN,
+            trigger_depth_mm: 1.5,
+            action: ShortcutAction::ToggleLighting,
+        };
+        assert!(validate_daemon_rules(std::slice::from_ref(&fn_mod_rule)).is_err());
+        assert!(validate_daemon_rules(std::slice::from_ref(&fn_trig_rule)).is_err());
+
+        let empty_cmd = ShortcutRule {
+            id: 3,
+            name: "Empty Cmd".into(),
+            enabled: true,
+            modifier_key: Some(keymap::idx::CAPS),
+            trigger_key: keymap::idx::W,
+            trigger_depth_mm: 1.5,
+            action: ShortcutAction::RunCommand {
+                command: "   ".into(),
+            },
+        };
+        assert!(validate_daemon_rules(&[empty_cmd]).is_err());
+
+        let dup_a = ShortcutRule {
+            id: 4,
+            name: "First".into(),
+            enabled: true,
+            modifier_key: Some(keymap::idx::L_ALT),
+            trigger_key: keymap::idx::W,
+            trigger_depth_mm: 1.5,
+            action: ShortcutAction::ToggleLighting,
+        };
+        let dup_b = ShortcutRule {
+            id: 5,
+            name: "Duplicate".into(),
+            enabled: true,
+            modifier_key: Some(keymap::idx::L_ALT),
+            trigger_key: keymap::idx::W,
+            trigger_depth_mm: 1.8,
+            action: ShortcutAction::RunCommand {
+                command: "konsole".into(),
+            },
+        };
+        assert!(validate_daemon_rules(&[dup_a, dup_b]).is_err());
+
+        let mut engine = ShortcutEngine::default();
+        engine.set_rules(vec![fn_mod_rule, fn_trig_rule], true);
+        assert!(engine.rules.is_empty());
+    }
+
+    #[test]
     fn resolves_default_shortcuts_file_path() {
         let sock = PathBuf::from("/tmp/reaula-test/reaulad.sock");
         assert_eq!(
@@ -761,5 +1091,27 @@ mod tests {
     fn spawn_user_command_refuses_root_only_allowlist() {
         let err = spawn_user_command("true", &[0]).unwrap_err();
         assert!(err.contains("non-root"));
+    }
+
+    #[test]
+    fn build_user_command_env_sanitizes_root_and_populates_user_identity() {
+        let user = ipc::UserPasswdRecord {
+            uid: 1000,
+            gid: 1000,
+            username: "testuser".into(),
+            home_dir: PathBuf::from("/home/testuser"),
+            shell: "/bin/bash".into(),
+            groups: vec![1000],
+        };
+        let env = build_user_command_env(&user);
+        assert_eq!(env.get("HOME").map(String::as_str), Some("/home/testuser"));
+        assert_eq!(env.get("USER").map(String::as_str), Some("testuser"));
+        assert_eq!(env.get("LOGNAME").map(String::as_str), Some("testuser"));
+        assert_eq!(env.get("SHELL").map(String::as_str), Some("/bin/bash"));
+        assert!(!env.contains_key("SUDO_USER"));
+        assert!(!env.contains_key("SUDO_UID"));
+        if let Some(xauth) = env.get("XAUTHORITY") {
+            assert!(!xauth.starts_with("/root"));
+        }
     }
 }

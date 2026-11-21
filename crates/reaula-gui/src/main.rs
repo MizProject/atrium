@@ -9,6 +9,7 @@ mod widgets;
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::ops::Range;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -16,8 +17,9 @@ use std::time::{Duration, Instant};
 
 use clap::Parser;
 use gpui::{
-    App, Application, AsyncApp, Bounds, Context, Div, FocusHandle, KeyDownEvent, Pixels,
-    RenderImage, WeakEntity, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
+    App, Application, AsyncApp, Bounds, Context, Div, EntityInputHandler, FocusHandle, KeyDownEvent,
+    Pixels, RenderImage, UTF16Selection, WeakEntity, Window, WindowBounds, WindowOptions, div,
+    prelude::*, px, rgb, size,
 };
 
 use reaula_core::diagnostics::DiagnosticReport;
@@ -75,6 +77,7 @@ pub(crate) struct ReaulaGui {
 
     pub(crate) root_focus: FocusHandle,
     pub(crate) cmd_focus: FocusHandle,
+    pub(crate) focus_cmd_next_frame: bool,
 }
 
 impl ReaulaGui {
@@ -188,6 +191,7 @@ impl ReaulaGui {
             dragging_picker: None,
             root_focus: cx.focus_handle(),
             cmd_focus: cx.focus_handle(),
+            focus_cmd_next_frame: false,
         }
     }
 
@@ -998,10 +1002,135 @@ impl ReaulaGui {
     }
 }
 
+fn utf16_offset_to_byte(s: &str, utf16_offset: usize) -> usize {
+    let mut acc = 0usize;
+    for (byte_idx, ch) in s.char_indices() {
+        if acc >= utf16_offset {
+            return byte_idx;
+        }
+        acc += ch.len_utf16();
+    }
+    s.len()
+}
+
+fn utf16_range_to_bytes(s: &str, range: Range<usize>) -> Range<usize> {
+    let total_utf16 = s.encode_utf16().count();
+    let start_u16 = range.start.min(total_utf16);
+    let end_u16 = range.end.clamp(start_u16, total_utf16);
+    utf16_offset_to_byte(s, start_u16)..utf16_offset_to_byte(s, end_u16)
+}
+
+pub(crate) fn sanitize_command_paste(text: &str) -> String {
+    text.chars()
+        .filter(|&c| c != '\r' && c != '\n' && !c.is_control())
+        .collect()
+}
+
+impl EntityInputHandler for ReaulaGui {
+    fn text_for_range(
+        &mut self,
+        range: Range<usize>,
+        adjusted_range: &mut Option<Range<usize>>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<String> {
+        let Ok(st) = &self.conn else {
+            return None;
+        };
+        let total = st.draft_rule_command.encode_utf16().count();
+        let clamped = range.start.min(total)..range.end.clamp(range.start.min(total), total);
+        *adjusted_range = Some(clamped.clone());
+        let byte_range = utf16_range_to_bytes(&st.draft_rule_command, clamped);
+        Some(st.draft_rule_command[byte_range].to_string())
+    }
+
+    fn selected_text_range(
+        &mut self,
+        _ignore_disabled_input: bool,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<UTF16Selection> {
+        let len16 = self
+            .conn
+            .as_ref()
+            .map_or(0, |st| st.draft_rule_command.encode_utf16().count());
+        Some(UTF16Selection {
+            range: len16..len16,
+            reversed: false,
+        })
+    }
+
+    fn marked_text_range(
+        &self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Range<usize>> {
+        None
+    }
+
+    fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {}
+
+    fn replace_text_in_range(
+        &mut self,
+        range: Option<Range<usize>>,
+        text: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Ok(st) = &mut self.conn else {
+            return;
+        };
+        let clean = sanitize_command_paste(text);
+        if let Some(r16) = range {
+            let br = utf16_range_to_bytes(&st.draft_rule_command, r16);
+            st.draft_rule_command.replace_range(br, &clean);
+        } else {
+            st.draft_rule_command.push_str(&clean);
+        }
+        cx.notify();
+    }
+
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        range: Option<Range<usize>>,
+        new_text: &str,
+        _new_selected_range: Option<Range<usize>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.replace_text_in_range(range, new_text, window, cx);
+    }
+
+    fn bounds_for_range(
+        &mut self,
+        _range_utf16: Range<usize>,
+        element_bounds: Bounds<Pixels>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Bounds<Pixels>> {
+        Some(element_bounds)
+    }
+
+    fn character_index_for_point(
+        &mut self,
+        _point: gpui::Point<Pixels>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        None
+    }
+}
+
 impl Render for ReaulaGui {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         for dead in self.pending_drop_images.drain(..) {
             let _ = window.drop_image(dead);
+        }
+        if self.focus_cmd_next_frame {
+            self.focus_cmd_next_frame = false;
+            window.focus(&self.cmd_focus);
+        } else if self.nav != NavSection::Hotkeys && self.cmd_focus.is_focused(window) {
+            window.focus(&self.root_focus);
         }
 
         let top_header = div()
@@ -1240,4 +1369,18 @@ fn main() {
         .detach();
         cx.activate(true);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_command_paste_strips_newlines_and_controls() {
+        assert_eq!(
+            sanitize_command_paste("notify-send 'hi'\nrm -rf\x07\r"),
+            "notify-send 'hi'rm -rf"
+        );
+        assert_eq!(utf16_range_to_bytes("abc", 1..2), 1..2);
+    }
 }

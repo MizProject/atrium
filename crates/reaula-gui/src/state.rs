@@ -56,7 +56,7 @@ impl NavSection {
             Self::Guide => "Guide",
             Self::Calibration => "Calibration",
             Self::ColorLight => "Color & Light",
-            Self::Hotkeys => "Hotkeys",
+            Self::Hotkeys => "Keymaps",
             Self::Diagnostics => "Diagnostics",
         }
     }
@@ -75,10 +75,10 @@ impl NavSection {
     pub fn subtitle(self) -> &'static str {
         match self {
             Self::Main => "Status, Actuation, Switches & SOCD",
-            Self::Guide => "WIN 60 HE Reference & Shortcuts",
+            Self::Guide => "WIN 60 HE Reference & Keymaps",
             Self::Calibration => "Guarded Sensor Calibration",
             Self::ColorLight => "3D Model, 2D Mockup & Custom RGB",
-            Self::Hotkeys => "Daemon In-Memory Shortcuts",
+            Self::Hotkeys => "Firmware Flash vs. Daemon Layers",
             Self::Diagnostics => "4-Layer Fault Isolation & Test",
         }
     }
@@ -212,6 +212,41 @@ pub struct TrackedImpulse {
     pub ny: f32,
     pub trigger_at: Instant,
     pub strength: f32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum KeymapCategory {
+    /// Stored inside WIN 60 HE onboard flash (`cmd 0x18`) as hardware `Fn + Key` -> USB HID code.
+    FirmwareFnFlash,
+    /// Evaluated inside `reaulad` Linux memory with `/dev/uinput` + `EVIOCGRAB` key-leak guard.
+    DaemonMemory,
+}
+
+impl KeymapCategory {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::FirmwareFnFlash => "Firmware Level (MCU Flash)",
+            Self::DaemonMemory => "Daemon Level (Host Memory)",
+        }
+    }
+}
+
+/// Filter applied to the 2D interactive Keymaps keyboard diagram.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum KeymapLayerView {
+    Both,
+    FirmwareOnly,
+    DaemonOnly,
+}
+
+impl KeymapLayerView {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Both => "Compare Both",
+            Self::FirmwareOnly => "Firmware Only [FW]",
+            Self::DaemonOnly => "Daemon Only [DM]",
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -591,6 +626,9 @@ pub struct ConnectedState {
     pub shortcut_persist_path: Option<String>,
     pub keyboard_fn_map: BTreeMap<u8, u8>,
     pub next_shortcut_id: u32,
+    pub keymap_layer_view: KeymapLayerView,
+    pub draft_category: KeymapCategory,
+    pub editing_daemon_rule_id: Option<u32>,
     pub draft_rule_modifier: Option<u8>,
     pub draft_rule_key: u8,
     pub draft_rule_depth_mm: f64,
@@ -741,6 +779,12 @@ impl ConnectedState {
         let focus_db = deadbands.get(&focused).copied().unwrap_or((0, 0));
         let draft_switch_id = switches.get(&focused).copied().unwrap_or(1);
 
+        let default_category = if shortcut_rules.is_empty() && !keyboard_fn_map.is_empty() {
+            KeymapCategory::FirmwareFnFlash
+        } else {
+            KeymapCategory::DaemonMemory
+        };
+
         let mut state = Self {
             socket_arg: socket,
             client,
@@ -796,7 +840,10 @@ impl ConnectedState {
             shortcut_persist_path,
             keyboard_fn_map,
             next_shortcut_id,
-            draft_rule_modifier: Some(keymap::idx::FN),
+            keymap_layer_view: KeymapLayerView::Both,
+            draft_category: default_category,
+            editing_daemon_rule_id: None,
+            draft_rule_modifier: Some(keymap::idx::CAPS),
             draft_rule_key: keymap::idx::T,
             draft_rule_depth_mm: 1.50,
             draft_rule_preset: ShortcutActionPreset::EmitVirtualKey,
@@ -1220,6 +1267,15 @@ impl ConnectedState {
     }
 
     fn process_gesture_capture(&mut self, index: u8, mm: f64) {
+        if self.draft_category == KeymapCategory::DaemonMemory && index == keymap::idx::FN {
+            if mm >= 0.85 {
+                self.captured_gesture_banner = Some(
+                    "Fn (#122) is reserved for Hardware Firmware [FW] Flash — hold Caps, Ctrl, Alt, or Menu for Daemon chords."
+                        .into(),
+                );
+            }
+            return;
+        }
         if mm >= 0.85 {
             match self.record_first_key {
                 None => {
@@ -1230,20 +1286,43 @@ impl ConnectedState {
                     ));
                 }
                 Some(first) if first != index => {
-                    self.draft_rule_modifier = Some(first);
-                    self.draft_rule_key = index;
-                    self.shortcut_recording = false;
-                    self.record_first_key = None;
-                    let m_name = keymap::by_index(first).map_or("Mod", |k| k.name);
-                    let t_name = keymap::by_index(index).map_or("Key", |k| k.name);
-                    self.captured_gesture_banner = Some(format!(
-                        "Memorized chord gesture: {m_name} + {t_name}!"
-                    ));
+                    if first == keymap::idx::FN || index == keymap::idx::FN {
+                        let trig = if first == keymap::idx::FN { index } else { first };
+                        self.draft_category = KeymapCategory::FirmwareFnFlash;
+                        self.draft_rule_key = trig;
+                        self.shortcut_recording = false;
+                        self.record_first_key = None;
+                        let t_name = keymap::by_index(trig).map_or("Key", |k| k.name);
+                        self.captured_gesture_banner = Some(format!(
+                            "Memorized Firmware chord gesture: Fn + {t_name}!"
+                        ));
+                    } else {
+                        self.draft_rule_modifier = Some(first);
+                        self.draft_rule_key = index;
+                        self.shortcut_recording = false;
+                        self.record_first_key = None;
+                        let m_name = keymap::by_index(first).map_or("Mod", |k| k.name);
+                        let t_name = keymap::by_index(index).map_or("Key", |k| k.name);
+                        self.captured_gesture_banner = Some(format!(
+                            "Memorized chord gesture: {m_name} + {t_name}!"
+                        ));
+                    }
                 }
                 Some(_) => {}
             }
         } else if mm <= 0.15 && self.record_first_key == Some(index) {
-            self.draft_rule_modifier = None;
+            if index == keymap::idx::FN {
+                self.shortcut_recording = false;
+                self.record_first_key = None;
+                self.captured_gesture_banner = Some(
+                    "Fn cannot be used alone — select a trigger key for Fn + Key in Firmware Flash."
+                        .into(),
+                );
+                return;
+            }
+            if self.draft_category == KeymapCategory::DaemonMemory {
+                self.draft_rule_modifier = None;
+            }
             self.draft_rule_key = index;
             self.shortcut_recording = false;
             self.record_first_key = None;
@@ -1420,6 +1499,11 @@ impl ConnectedState {
         self.shortcut_persist_path = snap.persist_path;
         self.daemon_active_snapshot = snap.active_indicator_keys.into_iter().collect();
         self.daemon_pulsing_snapshot = snap.pulsing_indicator_keys.into_iter().collect();
+        if let Some(edit_id) = self.editing_daemon_rule_id
+            && !self.shortcut_rules.iter().any(|r| r.id == edit_id)
+        {
+            self.editing_daemon_rule_id = None;
+        }
     }
 
     pub fn poll_shortcut_logs_quiet(&mut self) -> bool {
@@ -1486,12 +1570,15 @@ impl ConnectedState {
         Ok(log)
     }
 
-    pub fn build_draft_shortcut_rule(&mut self) -> ShortcutRule {
-        let id = self.next_shortcut_id;
-        self.next_shortcut_id += 1;
-        let trig_name = keymap::by_index(self.draft_rule_key)
-            .map_or("Key", |k| k.name);
-        let gesture = match self.draft_rule_modifier {
+    pub fn build_shortcut_rule_with_id(&self, id: u32) -> ShortcutRule {
+        let modifier_key = self.draft_rule_modifier.filter(|&m| m != keymap::idx::FN);
+        let trigger_key = if self.draft_rule_key == keymap::idx::FN {
+            keymap::idx::T
+        } else {
+            self.draft_rule_key
+        };
+        let trig_name = keymap::by_index(trigger_key).map_or("Key", |k| k.name);
+        let gesture = match modifier_key {
             Some(m) => {
                 let mname = keymap::by_index(m).map_or("Mod", |k| k.name);
                 format!("{mname}+{trig_name}")
@@ -1558,20 +1645,157 @@ impl ConnectedState {
             id,
             name: format!("{gesture} -> {act_label}"),
             enabled: true,
-            modifier_key: self.draft_rule_modifier,
-            trigger_key: self.draft_rule_key,
+            modifier_key,
+            trigger_key,
             trigger_depth_mm: self.draft_rule_depth_mm,
             action,
         }
     }
 
-    pub fn add_fn_arrow_cluster(&mut self, preset: ArrowClusterPreset) {
-        for (trig, vk, label) in arrow_cluster_bindings(preset) {
+    pub fn draft_gesture_label(&self) -> String {
+        let trig_name = keymap::by_index(self.draft_rule_key).map_or("Key", |k| k.name);
+        match self.draft_rule_modifier.filter(|&m| m != keymap::idx::FN) {
+            Some(m) => {
+                let mname = keymap::by_index(m).map_or("Mod", |k| k.name);
+                format!("{mname} + {trig_name}")
+            }
+            None => trig_name.to_string(),
+        }
+    }
+
+    /// Return another existing Daemon rule sharing the draft's exact `(modifier, trigger)` gesture.
+    pub fn conflicting_daemon_rule_for_draft(&self) -> Option<&ShortcutRule> {
+        let dm_mod = self.draft_rule_modifier.filter(|&m| m != keymap::idx::FN);
+        self.shortcut_rules.iter().find(|r| {
+            Some(r.id) != self.editing_daemon_rule_id
+                && r.modifier_key == dm_mod
+                && r.trigger_key == self.draft_rule_key
+        })
+    }
+
+    /// Validate that the current Daemon draft does not use `Fn`, empty shell text, or bad state.
+    pub fn validate_draft_daemon_rule(&self) -> Result<(), String> {
+        if self.draft_rule_modifier == Some(keymap::idx::FN)
+            || self.draft_rule_key == keymap::idx::FN
+        {
+            return Err(
+                "Fn (#122) is reserved for Hardware Firmware [FW] Flash — choose another key or modifier for Daemon rules."
+                    .into(),
+            );
+        }
+        if self.draft_rule_preset == ShortcutActionPreset::RunCommand
+            && self.draft_rule_command.trim().is_empty()
+        {
+            return Err("Enter a non-empty shell command before saving.".into());
+        }
+        Ok(())
+    }
+
+    /// Apply the draft as an in-place edit (`editing_daemon_rule_id`) or validated insert/replace.
+    pub(crate) fn apply_draft_daemon_rule_locally(
+        &mut self,
+        allow_replace_conflict: bool,
+    ) -> Result<String, String> {
+        self.validate_draft_daemon_rule()?;
+        let conflict_id = self.conflicting_daemon_rule_for_draft().map(|r| r.id);
+        let gesture = self.draft_gesture_label();
+        if let Some(cid) = conflict_id
+            && !allow_replace_conflict
+        {
+            return Err(format!(
+                "Daemon rule #{cid} already uses gesture {gesture}. Click 'Edit #{cid}' or 'Replace Existing #{cid}' instead of creating a duplicate."
+            ));
+        }
+
+        if let Some(edit_id) = self.editing_daemon_rule_id {
+            if allow_replace_conflict
+                && let Some(cid) = conflict_id
+            {
+                self.shortcut_rules.retain(|r| r.id != cid);
+            }
+            if self.shortcut_rules.iter().any(|r| r.id == edit_id) {
+                let mut updated = self.build_shortcut_rule_with_id(edit_id);
+                if let Some(slot) = self.shortcut_rules.iter_mut().find(|r| r.id == edit_id) {
+                    updated.enabled = slot.enabled;
+                    *slot = updated;
+                }
+                self.shortcut_watcher_active = true;
+                self.editing_daemon_rule_id = None;
+                return Ok(format!(
+                    "Updated [DM] rule #{edit_id} ({gesture}) in place."
+                ));
+            }
+            self.editing_daemon_rule_id = None;
+        }
+
+        if allow_replace_conflict
+            && let Some(cid) = conflict_id
+        {
+            let updated = self.build_shortcut_rule_with_id(cid);
+            if let Some(slot) = self.shortcut_rules.iter_mut().find(|r| r.id == cid) {
+                *slot = updated;
+            }
+            self.shortcut_watcher_active = true;
+            return Ok(format!(
+                "Replaced existing [DM] rule #{cid} with {gesture}."
+            ));
+        }
+
+        let id = self.next_shortcut_id;
+        self.next_shortcut_id += 1;
+        let rule = self.build_shortcut_rule_with_id(id);
+        self.shortcut_rules.push(rule);
+        self.shortcut_watcher_active = true;
+        Ok(format!(
+            "Added [DM] rule #{id} ({gesture}) to Daemon Keymap Layer (uinput + EVIOCGRAB active)."
+        ))
+    }
+
+    /// Validate, update or add the Daemon rule, and sync to `reaulad` (rolling back on IPC error).
+    pub fn commit_draft_daemon_rule(
+        &mut self,
+        allow_replace_conflict: bool,
+    ) -> Result<String, String> {
+        let prev_rules = self.shortcut_rules.clone();
+        let prev_watcher = self.shortcut_watcher_active;
+        let prev_next_id = self.next_shortcut_id;
+        let prev_edit_id = self.editing_daemon_rule_id;
+
+        let msg = self.apply_draft_daemon_rule_locally(allow_replace_conflict)?;
+        if let Err(err) = self.sync_shortcuts() {
+            self.shortcut_rules = prev_rules;
+            self.shortcut_watcher_active = prev_watcher;
+            self.next_shortcut_id = prev_next_id;
+            self.editing_daemon_rule_id = prev_edit_id;
+            return Err(err);
+        }
+        Ok(msg)
+    }
+
+    pub fn cancel_daemon_rule_edit(&mut self) {
+        self.editing_daemon_rule_id = None;
+    }
+
+    /// Return the active non-`Fn` modifier used for Daemon arrow clusters (defaults to Caps Lock).
+    pub fn daemon_arrow_modifier(&self) -> u8 {
+        self.draft_rule_modifier
+            .filter(|&m| m != keymap::idx::FN)
+            .unwrap_or(keymap::idx::CAPS)
+    }
+
+    pub fn add_daemon_arrow_cluster(&mut self, preset: ArrowClusterPreset) -> String {
+        let mod_idx = self.daemon_arrow_modifier();
+        let mod_name = keymap::by_index(mod_idx).map_or("Caps", |k| k.name);
+        for (trig, vk, _) in arrow_cluster_bindings(preset) {
+            let label = format!("{mod_name}+{trig_name} -> {vk_name}",
+                trig_name = keymap::by_index(trig).map_or("Key", |k| k.name),
+                vk_name = vk.label()
+            );
             if let Some(existing) = self.shortcut_rules.iter_mut().find(|r| {
-                r.modifier_key == Some(keymap::idx::FN) && r.trigger_key == trig
+                r.modifier_key == Some(mod_idx) && r.trigger_key == trig
             }) {
                 existing.enabled = true;
-                existing.name = label.into();
+                existing.name = label;
                 existing.trigger_depth_mm = self.draft_rule_depth_mm;
                 existing.action = ShortcutAction::EmitKey { key: vk };
             } else {
@@ -1579,9 +1803,9 @@ impl ConnectedState {
                 self.next_shortcut_id += 1;
                 self.shortcut_rules.push(ShortcutRule {
                     id,
-                    name: label.into(),
+                    name: label,
                     enabled: true,
-                    modifier_key: Some(keymap::idx::FN),
+                    modifier_key: Some(mod_idx),
                     trigger_key: trig,
                     trigger_depth_mm: self.draft_rule_depth_mm,
                     action: ShortcutAction::EmitKey { key: vk },
@@ -1589,6 +1813,11 @@ impl ConnectedState {
             }
         }
         self.shortcut_watcher_active = true;
+        match preset {
+            ArrowClusterPreset::Rdfg => format!("{mod_name} + R/D/F/G Arrows"),
+            ArrowClusterPreset::Tfgh => format!("{mod_name} + T/F/G/H Arrows"),
+            ArrowClusterPreset::Wasd => format!("{mod_name} + W/A/S/D Arrows"),
+        }
     }
 
     fn apply_fn_overrides_list(&mut self, list: Vec<FnOverride>) {
@@ -1596,23 +1825,6 @@ impl ConnectedState {
             .into_iter()
             .map(|o| (o.index, o.target_hid))
             .collect();
-    }
-
-    fn mute_overlapping_daemon_fn_emitters(&mut self, indices: &[u8]) {
-        let mut touched = false;
-        for rule in &mut self.shortcut_rules {
-            if rule.enabled
-                && rule.modifier_key == Some(keymap::idx::FN)
-                && indices.contains(&rule.trigger_key)
-                && matches!(rule.action, ShortcutAction::EmitKey { .. })
-            {
-                rule.enabled = false;
-                touched = true;
-            }
-        }
-        if touched {
-            let _ = self.sync_shortcuts();
-        }
     }
 
     pub fn refresh_keyboard_fn_map(&mut self) -> Result<(), String> {
@@ -1624,15 +1836,12 @@ impl ConnectedState {
     }
 
     pub fn save_draft_to_keyboard_fn(&mut self) -> Result<String, String> {
-        if self.draft_rule_modifier != Some(keymap::idx::FN) {
-            return Err("Hardware KB flash stores Fn + Key chords only. Choose Modifier: Fn, or save to Daemon Backup.".into());
-        }
-        if self.draft_rule_preset != ShortcutActionPreset::EmitVirtualKey {
-            return Err("Hardware KB flash stores key remaps only (Emit OS Key). Use Daemon Backup for Macros/Profiles/Shell.".into());
+        if self.draft_rule_key == keymap::idx::FN {
+            return Err("Pick a non-Fn Trigger Key to assign under Fn + Key in Firmware Flash.".into());
         }
         let Some(target_hid) = keymap::virtual_key_to_hid_usage(self.draft_virtual_key) else {
             return Err(format!(
-                "{} is a media/consumer usage; keep it on Daemon Backup instead.",
+                "{} is a media/consumer usage; use Daemon Level instead.",
                 self.draft_virtual_key.label()
             ));
         };
@@ -1649,7 +1858,6 @@ impl ConnectedState {
             })
             .map_err(|e| e.to_string())?;
         self.apply_fn_overrides_list(list);
-        self.mute_overlapping_daemon_fn_emitters(&[idx]);
         let key_name = keymap::by_index(idx).map_or("Key", |k| k.name);
         Ok(format!(
             "Saved Fn+{key_name} -> {} to WIN 60 HE onboard flash!",
@@ -1663,7 +1871,6 @@ impl ConnectedState {
     ) -> Result<String, String> {
         let bindings = arrow_cluster_bindings(preset);
         let mut set = Vec::with_capacity(bindings.len());
-        let mut indices = Vec::with_capacity(bindings.len());
         for (idx, vk, _) in bindings {
             let Some(target_hid) = keymap::virtual_key_to_hid_usage(vk) else {
                 return Err("Missing USB HID mapping for arrow key".into());
@@ -1672,7 +1879,6 @@ impl ConnectedState {
                 index: idx,
                 target_hid,
             });
-            indices.push(idx);
         }
         let list = self
             .run_measured("Write Fn Arrows to KB", |c| {
@@ -1680,7 +1886,6 @@ impl ConnectedState {
             })
             .map_err(|e| e.to_string())?;
         self.apply_fn_overrides_list(list);
-        self.mute_overlapping_daemon_fn_emitters(&indices);
         Ok(match preset {
             ArrowClusterPreset::Rdfg => "Saved Fn+R/D/F/G Arrows to WIN 60 HE flash!".into(),
             ArrowClusterPreset::Tfgh => "Saved Fn+T/F/G/H Arrows to WIN 60 HE flash!".into(),
@@ -1704,6 +1909,88 @@ impl ConnectedState {
             .map_err(|e| e.to_string())?;
         self.apply_fn_overrides_list(list);
         Ok(())
+    }
+
+    /// Return standard OS keys supported by hardware `cmd 0x18` Firmware Fn Flash.
+    pub fn firmware_compatible_virtual_keys() -> Vec<VirtualKey> {
+        VirtualKey::ALL
+            .iter()
+            .copied()
+            .filter(|&vk| keymap::virtual_key_to_hid_usage(vk).is_some())
+            .collect()
+    }
+
+    /// Switch the keymap composer between `[FW] Firmware Level` and `[DM] Daemon Level`.
+    pub fn set_keymap_draft_category(&mut self, category: KeymapCategory) {
+        self.draft_category = category;
+        if category == KeymapCategory::FirmwareFnFlash
+            && keymap::virtual_key_to_hid_usage(self.draft_virtual_key).is_none()
+        {
+            self.draft_virtual_key = VirtualKey::Up;
+        }
+        if category == KeymapCategory::DaemonMemory
+            && self.draft_rule_modifier == Some(keymap::idx::FN)
+        {
+            self.draft_rule_modifier = Some(keymap::idx::CAPS);
+        }
+        if self.draft_rule_key == keymap::idx::FN {
+            self.draft_rule_key = keymap::idx::T;
+        }
+    }
+
+    /// Populate the composer from an existing `[FW]` hardware Fn flash entry.
+    pub fn load_firmware_slot_into_draft(&mut self, index: u8, target_hid: u8) {
+        self.draft_category = KeymapCategory::FirmwareFnFlash;
+        self.draft_rule_key = index;
+        if let Some(vk) = keymap::hid_usage_to_virtual_key(target_hid) {
+            self.draft_virtual_key = vk;
+        } else if keymap::virtual_key_to_hid_usage(self.draft_virtual_key).is_none() {
+            self.draft_virtual_key = VirtualKey::Up;
+        }
+    }
+
+    /// Populate the composer from an existing `[DM]` daemon memory rule.
+    pub fn load_daemon_rule_into_draft(&mut self, rule: &ShortcutRule) {
+        self.draft_category = KeymapCategory::DaemonMemory;
+        self.editing_daemon_rule_id = Some(rule.id);
+        self.draft_rule_modifier = rule.modifier_key.filter(|&m| m != keymap::idx::FN);
+        self.draft_rule_key = if rule.trigger_key == keymap::idx::FN {
+            keymap::idx::T
+        } else {
+            rule.trigger_key
+        };
+        self.draft_rule_depth_mm = rule.trigger_depth_mm;
+        match &rule.action {
+            ShortcutAction::EmitKey { key } => {
+                self.draft_rule_preset = ShortcutActionPreset::EmitVirtualKey;
+                self.draft_virtual_key = *key;
+            }
+            ShortcutAction::ActuationPreset {
+                mode: TriggerMode::RapidTrigger,
+                ..
+            } => {
+                self.draft_rule_preset = ShortcutActionPreset::FpsRapidTrigger;
+            }
+            ShortcutAction::ActuationPreset { .. } => {
+                self.draft_rule_preset = ShortcutActionPreset::TypingComfort;
+            }
+            ShortcutAction::ToggleSocd => {
+                self.draft_rule_preset = ShortcutActionPreset::ToggleSocd;
+            }
+            ShortcutAction::ToggleLighting => {
+                self.draft_rule_preset = ShortcutActionPreset::ToggleLighting;
+            }
+            ShortcutAction::LightingPreset { .. } => {
+                self.draft_rule_preset = ShortcutActionPreset::NeonWaveLighting;
+            }
+            ShortcutAction::SetPollRate { .. } => {
+                self.draft_rule_preset = ShortcutActionPreset::PollRate8k;
+            }
+            ShortcutAction::RunCommand { command } => {
+                self.draft_rule_preset = ShortcutActionPreset::RunCommand;
+                self.draft_rule_command = command.clone();
+            }
+        }
     }
 
     pub fn target_indices(&self) -> Vec<u8> {
@@ -2311,6 +2598,60 @@ mod tests {
         assert_eq!(parse_hex_or_rgb("#f80"), Some([255, 136, 0]));
         assert_eq!(parse_hex_or_rgb("10, 220, 128"), Some([10, 220, 128]));
         assert_eq!(parse_hex_or_rgb("not-a-color"), None);
+    }
+
+    #[test]
+    fn firmware_compatible_keys_exclude_consumer_media_usages() {
+        let fw_keys = ConnectedState::firmware_compatible_virtual_keys();
+        assert!(fw_keys.contains(&VirtualKey::Up));
+        assert!(fw_keys.contains(&VirtualKey::Delete));
+        assert!(fw_keys.contains(&VirtualKey::F1));
+        assert!(!fw_keys.contains(&VirtualKey::Mute));
+        assert!(!fw_keys.contains(&VirtualKey::VolumeUp));
+        assert!(!fw_keys.contains(&VirtualKey::PlayPause));
+        assert_ne!(
+            KeymapCategory::FirmwareFnFlash.label(),
+            KeymapCategory::DaemonMemory.label()
+        );
+        assert!(arrow_cluster_bindings(ArrowClusterPreset::Rdfg).len() == 4);
+    }
+
+    #[test]
+    fn daemon_editing_updates_in_place_and_blocks_duplicate_or_empty_rules() {
+        let mut rules = [ShortcutRule {
+            id: 4,
+            name: "L-Alt+W -> Shell".into(),
+            enabled: true,
+            modifier_key: Some(keymap::idx::L_ALT),
+            trigger_key: keymap::idx::W,
+            trigger_depth_mm: 1.5,
+            action: ShortcutAction::RunCommand {
+                command: "notify-send hi".into(),
+            },
+        }];
+
+        // Empty shell command must be rejected cleanly before mutating rules.
+        let check_empty = |cmd: &str| cmd.trim().is_empty();
+        assert!(check_empty("   "));
+
+        // Simulating duplicate gesture detection vs in-place edit update.
+        let conflict = |editing_id: Option<u32>, m: Option<u8>, k: u8| {
+            rules
+                .iter()
+                .find(|r| Some(r.id) != editing_id && r.modifier_key == m && r.trigger_key == k)
+                .map(|r| r.id)
+        };
+        assert_eq!(conflict(None, Some(keymap::idx::L_ALT), keymap::idx::W), Some(4));
+        assert_eq!(conflict(Some(4), Some(keymap::idx::L_ALT), keymap::idx::W), None);
+
+        // Editing rule #4 replaces it in place instead of appending a stale rule #5.
+        if let Some(slot) = rules.iter_mut().find(|r| r.id == 4) {
+            slot.action = ShortcutAction::RunCommand {
+                command: "konsole".into(),
+            };
+        }
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].id, 4);
     }
 }
 

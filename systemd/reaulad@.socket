@@ -1,0 +1,13 @@
+[Unit]
+Description=Reaula Hardware Driver Daemon Socket for %i
+Documentation=https://github.com/MizProject/reaula
+
+[Socket]
+ListenStream=/run/reaula/reaulad.sock
+SocketUser=%i
+SocketMode=0600
+DirectoryMode=0711
+Service=reaulad@%i.service
+
+[Install]
+WantedBy=sockets.target

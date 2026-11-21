@@ -67,6 +67,32 @@ pub const INK_DANGER: u32 = 0xDB9CA6;
 /// Subtle muted-rose hairline for error banners & destructive buttons.
 pub const BORDER_DANGER: u32 = 0x5E3B46;
 
+// ---------------------------------------------------------------------------
+// Keymap Category Visual Taxonomy ([FW] Amber Flash vs. [DM] Aqua Daemon)
+// ---------------------------------------------------------------------------
+
+/// Firmware-level MCU flash (`cmd 0x18`) Amber Gold category tokens.
+pub const FW_AMBER_BORDER: u32 = 0xF59E0B;
+pub const FW_AMBER_DIM_BORDER: u32 = 0x855814;
+pub const FW_AMBER_BG: u32 = 0x291E0D;
+pub const FW_AMBER_GLOW: u32 = 0x453012;
+pub const FW_AMBER_INK: u32 = 0xFCD34D;
+
+/// Daemon-level (`reaulad` / `uinput` / `EVIOCGRAB`) Aqua Blue category tokens.
+pub const DM_AQUA_BORDER: u32 = 0x00D7FF;
+pub const DM_AQUA_DIM_BORDER: u32 = 0x0E7490;
+pub const DM_AQUA_BG: u32 = 0x072938;
+pub const DM_AQUA_ACTIVE: u32 = 0x083B4D;
+pub const DM_AQUA_PULSE: u32 = 0x0F5E75;
+pub const DM_AQUA_PULSE_BORDER: u32 = 0x7EF9FF;
+pub const DM_AQUA_INK: u32 = 0x6EFCFF;
+pub const DM_AQUA_PULSE_INK: u32 = 0xC4FEFF;
+
+/// Shared Firmware + Daemon overlap slot highlight.
+pub const OVERLAP_BORDER: u32 = 0xC084FC;
+pub const OVERLAP_BG: u32 = 0x221F38;
+pub const OVERLAP_INK: u32 = 0xE9D5FF;
+
 /// Linear RGB equivalents for the `wgpu` 3D studio horizon (`SHADE_DEEP`) and desk (`SHADE_BASE`).
 pub const STUDIO_CLEAR_LINEAR: [f64; 3] = [0.0052, 0.0123, 0.0296];
 pub const STUDIO_DESK_LINEAR: [f32; 3] = [0.0108, 0.0242, 0.0612];

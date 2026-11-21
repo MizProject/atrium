@@ -16,8 +16,9 @@ use std::time::{Duration, Instant};
 use reaula_core::ipc::{self, DaemonRequest, DaemonResponse, IpcError, PeerCredentials};
 use reaula_core::protocol::{CalibrationProgress, CalibrationStatus, LiveTravelSample};
 
-use crate::coordinator::{CoordinatorMsg, hardware_loop};
+use crate::coordinator::{CoordinatorMsg, DaemonRuntimeHealth, hardware_loop};
 use crate::shortcuts::resolve_shortcuts_path;
+use crate::systemd::{self, SystemdNotifier};
 
 pub(crate) fn spawn_detached(
     socket_path: &Path,
@@ -62,6 +63,7 @@ pub(crate) fn spawn_detached(
     cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    systemd::scrub_child_env(&mut cmd);
 
     // SAFETY: `setsid()` is async-signal-safe and detaches the child into a new session.
     unsafe {
@@ -101,15 +103,23 @@ pub(crate) fn spawn_detached(
 }
 
 pub(crate) fn run_server(
-    socket_path: PathBuf,
+    mut socket_path: PathBuf,
     allowed_uids: Vec<u32>,
     shortcuts_file: Option<PathBuf>,
     preferred_keyboard: Option<String>,
 ) -> Result<(), String> {
+    let mut notifier = SystemdNotifier::from_env();
+    let (listener, socket_activated) = if let Some(activated) = systemd::take_systemd_socket()? {
+        if let Some(bound) = activated.bound_path {
+            socket_path = bound;
+        }
+        (activated.listener, true)
+    } else {
+        let l = ipc::bind_secure_listener(&socket_path, &allowed_uids)
+            .map_err(|e| format!("failed to bind secure socket {}: {e}", socket_path.display()))?;
+        (l, false)
+    };
     let shortcuts_path = resolve_shortcuts_path(shortcuts_file.as_deref(), &socket_path);
-
-    let listener = ipc::bind_secure_listener(&socket_path, &allowed_uids)
-        .map_err(|e| format!("failed to bind secure socket {}: {e}", socket_path.display()))?;
     listener
         .set_nonblocking(true)
         .map_err(|e| format!("failed to set socket nonblocking: {e}"))?;
@@ -121,11 +131,13 @@ pub(crate) fn run_server(
     })
     .map_err(|e| format!("failed to install signal handler: {e}"))?;
 
+    let health = Arc::new(DaemonRuntimeHealth::new(notifier.is_systemd()));
     let (tx, rx) = mpsc::channel::<CoordinatorMsg>();
     let hw_shutdown = Arc::clone(&shutdown);
     let hw_allowed = allowed_uids.clone();
     let hw_sock_display = socket_path.display().to_string();
     let hw_keyboard = preferred_keyboard.clone();
+    let hw_health = Arc::clone(&health);
     let hw_handle = thread::Builder::new()
         .name("reaulad-hw".into())
         .spawn(move || {
@@ -136,23 +148,58 @@ pub(crate) fn run_server(
                 hw_sock_display,
                 shortcuts_path,
                 hw_keyboard,
+                hw_health,
             )
         })
         .map_err(|e| format!("failed to spawn hardware worker: {e}"))?;
 
+    let mut last_connected = health.is_device_connected();
+    let ready_status = format!(
+        "Listening on {} ({})",
+        socket_path.display(),
+        if socket_activated {
+            "systemd socket-activated"
+        } else {
+            "ready"
+        }
+    );
+    notifier.notify_ready(&ready_status);
+
     eprintln!(
-        "reaulad listening on {} (pid={}, uid={}, allowed_uids={:?}, keyboard={})",
+        "reaulad listening on {} (pid={}, uid={}, allowed_uids={:?}, keyboard={}, systemd={})",
         socket_path.display(),
         std::process::id(),
         ipc::current_uid(),
         allowed_uids,
-        preferred_keyboard.as_deref().unwrap_or("auto")
+        preferred_keyboard.as_deref().unwrap_or("auto"),
+        notifier.is_systemd(),
     );
 
     let mut next_client_id = 1u64;
     let allowed_arc = Arc::new(allowed_uids);
 
     while !shutdown.load(Ordering::Relaxed) {
+        let connected_now = health.is_device_connected();
+        if connected_now != last_connected {
+            last_connected = connected_now;
+            let st = if connected_now {
+                format!("Keyboard connected (socket {})", socket_path.display())
+            } else {
+                format!(
+                    "Waiting for USB HID keyboard (socket {})",
+                    socket_path.display()
+                )
+            };
+            notifier.notify_status(&st);
+        }
+
+        if let Some(wd_interval) = notifier.watchdog_interval() {
+            // Only ping systemd watchdog if hardware_loop heartbeat is still advancing.
+            if health.heartbeat_age() <= wd_interval.saturating_mul(2) {
+                notifier.maybe_notify_watchdog();
+            }
+        }
+
         match listener.accept() {
             Ok((stream, _addr)) => {
                 let cred = match ipc::peer_credentials(&stream) {
@@ -190,8 +237,11 @@ pub(crate) fn run_server(
         }
     }
 
+    notifier.notify_stopping("Shutting down reaulad cleanly");
     drop(listener);
-    let _ = fs::remove_file(&socket_path);
+    if !socket_activated {
+        let _ = fs::remove_file(&socket_path);
+    }
     let _ = tx.send(CoordinatorMsg::RequestShutdown);
     let _ = hw_handle.join();
     eprintln!("reaulad shut down cleanly.");

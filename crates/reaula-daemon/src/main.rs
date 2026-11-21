@@ -6,6 +6,7 @@ mod evdev;
 mod keyboards;
 mod server;
 mod shortcuts;
+mod systemd;
 mod uinput;
 
 use std::collections::BTreeSet;
@@ -71,9 +72,13 @@ struct Args {
 
 fn main() -> ExitCode {
     let args = Args::parse();
+    let notify_on_err = !args.capture_pcm && !args.detach && !args.list_keyboards;
     match run(args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
+            if notify_on_err {
+                systemd::SystemdNotifier::from_env().notify_errno(libc::EIO, &e);
+            }
             eprintln!("reaulad error: {e}");
             ExitCode::FAILURE
         }
