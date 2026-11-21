@@ -7,7 +7,7 @@ Userspace Linux driver suite in Rust for indexed **Aula** Hall-effect keyboards 
 - **`crates/reaula-core`**: Indexed keyboard catalog (`keyboards/`), WIN 60 HE HID wire codec & `hidapi` driver, sysfs HID inspector, ALSA audio capture & 14-band FFT/beat engine (`audio_fx`), 4-layer diagnostics, and `SO_PEERCRED`-secured Unix socket IPC.
 - **`crates/reaula-daemon` (`reaulad`)**: Single-owner USB/HID background daemon exposing a UID-restricted Unix socket (`/run/reaula/reaulad.sock`), indexed driver registry, in-memory Hall-effect shortcut/Fn watcher (`evdev` + `uinput`), and persistent daemon-hosted Audio Equalizer RGB engine.
 - **`crates/reaula-cli` (`reaula`)**: CLI connecting through `reaulad` (or directly via `--direct`, prompting for `sudo` when `hidraw` permissions require it).
-- **`crates/reaula-tui` (`reaula-tui`)**: Interactive `ratatui` terminal dashboard for keymap travel, actuation/switches, lighting + live Audio EQ controls, and SOCD/security inspection.
+- **`crates/reaula-tui` (`reaula-tui`)** *(experimental / incomplete)*: Early-stage `ratatui` terminal client. Not yet properly developed and still has known bugs; use `reaula-gui` or CLI commands for reliable control.
 - **`crates/reaula-gui` (`reaula-gui`)**: Native GPUI + `wgpu` desktop suite featuring:
   - **Main**: 61-key actuation & Rapid Trigger (`Fixed` / `RT` / `Split`), magnetic switch profiles (`HM1`, `HH1`, `CY1`, `TC1`), top/bottom deadbands, PRCS/SOCD pairs, USB polling rate (`1/2/4/8 kHz`), Win-Lock, and live travel monitor.
   - **Guide**: Interactive WIN 60 HE hardware reference & dual-layer keymapping documentation.
@@ -58,9 +58,11 @@ Run any frontend without `sudo` while `reaulad` is active:
 
 ```bash
 cargo run -- probe
-cargo run -- tui    # or cargo run -p reaula-tui
-cargo run -- gui    # or cargo run -p reaula-gui
+cargo run -- gui    # or cargo run -p reaula-gui (primary desktop UI)
+cargo run -- tui    # or cargo run -p reaula-tui (experimental)
 ```
+
+> **TUI status warning**: `reaula-tui` is not yet properly developed and still has bugs (layout clipping, incomplete focus/input edge cases, and unpolished views). Prefer `reaula-gui` or CLI commands for reliable daily configuration.
 
 Inspect indexed daemon keyboard drivers:
 

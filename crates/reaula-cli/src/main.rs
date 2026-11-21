@@ -91,7 +91,7 @@ enum Command {
         action: DaemonAction,
     },
 
-    /// Launch the Ratatui terminal UI (connects to reaulad)
+    /// Launch the experimental Ratatui terminal UI (incomplete, still has bugs)
     Tui,
 
     /// Launch the GPUI desktop window (connects to reaulad)
@@ -841,7 +841,12 @@ fn run(cli: Cli) -> Result<(), CliError> {
     match cli.command {
         Command::Scan => cmd_scan().map_err(CliError::from),
         Command::Daemon { action } => cmd_daemon(action, policy),
-        Command::Tui => launch_sibling("reaula-tui", policy.socket),
+        Command::Tui => {
+            eprintln!(
+                "Warning: reaula-tui is not yet properly developed and still has known bugs. Prefer `reaula gui` for daily use."
+            );
+            launch_sibling("reaula-tui", policy.socket)
+        }
         Command::Gui => launch_sibling("reaula-gui", policy.socket),
         Command::Probe => cmd_probe(policy),
         Command::Actuation { action } => cmd_actuation(action, policy),

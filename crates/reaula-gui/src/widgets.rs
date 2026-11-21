@@ -1,11 +1,10 @@
-//! Shared Regal Navy paper-matte GPUI components, dropdowns, Material icon buttons,
-//! and parameterized 61-key WIN 60 HE keyboard mockup.
+//! Domain hardware widgets: 61-key WIN 60 HE board canvas, 2D switch cutaway schematic,
+//! keymap badges, and Select option items.
 
-use std::rc::Rc;
-
-use gpui::{
-    BoxShadow, ClickEvent, Context, Corner, Div, ElementId, Hsla, MouseButton, SharedString,
-    Stateful, anchored, deferred, div, point, prelude::*, px, rgb, rgba,
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::select::SelectItem;
+use gpui_kit::{
+    ClickEvent, Context, Div, MouseButton, SharedString, div, prelude::*, px, rgb,
 };
 
 use reaula_core::ipc::{ShortcutAction, ShortcutRule, VirtualKey};
@@ -13,13 +12,12 @@ use reaula_core::keymap::{KEYBOARD_CANVAS_HEIGHT, KEYBOARD_CANVAS_WIDTH, WIN60HE
 use reaula_core::protocol::TriggerMode;
 
 use crate::ReaulaGui;
-use crate::icons::{self, MaterialIcon};
 use crate::kb_3d::{self, Kb3dSceneInput, MascotPose, switch::stem_color_hex_for_switch};
 use crate::state::{
-    ConnectedState, DropdownId, KeymapCategory, KeymapLayerView, SwitchInspectionSnapshot,
-    format_rgb_hex, pack_rgb_u32,
+    ConnectedState, KeymapCategory, KeymapLayerView, SwitchInspectionSnapshot, format_rgb_hex,
+    pack_rgb_u32,
 };
-use crate::theme;
+use crate::theme::{self, HardwareColors};
 
 pub const COLOR_SWATCHES: [(&str, [u8; 3]); 16] = [
     ("Off / Black", [0, 0, 0]),
@@ -42,7 +40,34 @@ pub const COLOR_SWATCHES: [(&str, [u8; 3]); 16] = [
 
 pub const SWITCH_OPTIONS: [(u8, &str); 4] = [(1, "HM1"), (2, "HH1"), (3, "CY1"), (5, "TC1")];
 
-pub const KB_SCALE_DEFAULT: f32 = 1.38;
+pub const KB_SCALE_DEFAULT: f32 = 1.24;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SelectOption<T: Clone + PartialEq + 'static> {
+    pub label: SharedString,
+    pub value: T,
+}
+
+impl<T: Clone + PartialEq + 'static> SelectOption<T> {
+    pub fn new(value: T, label: impl Into<SharedString>) -> Self {
+        Self {
+            label: label.into(),
+            value,
+        }
+    }
+}
+
+impl<T: Clone + PartialEq + 'static> SelectItem for SelectOption<T> {
+    type Value = T;
+
+    fn title(&self) -> SharedString {
+        self.label.clone()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.value
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum KeyboardCanvasMode {
@@ -53,39 +78,23 @@ pub enum KeyboardCanvasMode {
     DiagnosticsDepth,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum ButtonTone {
-    Primary,
-    Secondary,
-    Warn { active: bool },
-    Danger,
-}
-
-/// Archival category pill (`[FW]` Amber MCU flash vs. `[DM]` Aqua daemon memory).
-pub fn category_badge(
+pub fn hardware_tag(
     label: impl Into<SharedString>,
     is_firmware: bool,
     emphasized: bool,
+    hc: &HardwareColors,
 ) -> Div {
     let (bg, border, ink) = if is_firmware {
         (
-            if emphasized {
-                theme::FW_AMBER_GLOW
-            } else {
-                theme::FW_AMBER_BG
-            },
-            theme::FW_AMBER_BORDER,
-            theme::FW_AMBER_INK,
+            if emphasized { hc.fw_glow } else { hc.fw_bg },
+            hc.fw_border,
+            hc.fw_ink,
         )
     } else {
         (
-            if emphasized {
-                theme::DM_AQUA_ACTIVE
-            } else {
-                theme::DM_AQUA_BG
-            },
-            theme::DM_AQUA_BORDER,
-            theme::DM_AQUA_INK,
+            if emphasized { hc.dm_active } else { hc.dm_bg },
+            hc.dm_border,
+            hc.dm_ink,
         )
     };
     div()
@@ -101,471 +110,18 @@ pub fn category_badge(
         .child(label.into())
 }
 
-/// Small neutral action-type badge for `[DM]` Daemon rules (`uinput Key`, `Shell Cmd`, etc.).
 pub fn action_kind_tag(action: &ShortcutAction) -> &'static str {
     match action {
         ShortcutAction::EmitKey { .. } => "uinput Key",
+        ShortcutAction::RunCommand { .. } => "Shell Cmd",
         ShortcutAction::ActuationPreset { .. } => "Actuation",
         ShortcutAction::ToggleSocd => "SOCD",
-        ShortcutAction::LightingPreset { .. } => "Lighting",
-        ShortcutAction::ToggleLighting => "LED Power",
+        ShortcutAction::LightingPreset { .. } | ShortcutAction::ToggleLighting => "RGB",
         ShortcutAction::SetPollRate { .. } => "Poll Rate",
-        ShortcutAction::RunCommand { .. } => "Shell Cmd",
     }
-}
-
-/// Uniform paper-matte toggle / filter pill with optional Material Icon.
-pub fn icon_pill(
-    id: impl Into<ElementId>,
-    ic: Option<MaterialIcon>,
-    label: impl Into<SharedString>,
-    active: bool,
-) -> Stateful<Div> {
-    let bg = if active {
-        theme::SHADE_REGAL
-    } else {
-        theme::SHADE_DEEP
-    };
-    let border = if active {
-        theme::BORDER_FOCUS
-    } else {
-        theme::BORDER_MATTE
-    };
-    let fg = if active {
-        theme::INK_PRIMARY
-    } else {
-        theme::INK_SECONDARY
-    };
-
-    let mut d = div()
-        .id(id.into())
-        .px_2p5()
-        .py_1()
-        .rounded_md()
-        .bg(rgb(bg))
-        .border_1()
-        .border_color(rgb(border))
-        .text_xs()
-        .text_color(rgb(fg))
-        .whitespace_nowrap()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_1p5()
-        .cursor_pointer()
-        .hover(|s| {
-            s.bg(rgb(theme::SHADE_REGAL))
-                .border_color(rgb(if active {
-                    theme::BORDER_FOCUS
-                } else {
-                    theme::BORDER_REGAL
-                }))
-                .text_color(rgb(theme::INK_PRIMARY))
-        });
-
-    if let Some(m) = ic {
-        d = d.child(icons::icon(m, 14.0, fg));
-    }
-    d.child(label.into())
-}
-
-pub fn pill(
-    id: impl Into<ElementId>,
-    label: impl Into<SharedString>,
-    active: bool,
-) -> Stateful<Div> {
-    icon_pill(id, None, label, active)
-}
-
-/// Unified paper-matte action button parameterized by tone & optional Material Icon.
-pub fn icon_btn(
-    id: impl Into<ElementId>,
-    ic: Option<MaterialIcon>,
-    label: impl Into<SharedString>,
-    tone: ButtonTone,
-) -> Stateful<Div> {
-    let (bg, border, fg, hover_border) = match tone {
-        ButtonTone::Primary => (
-            theme::SHADE_REGAL,
-            theme::BORDER_FOCUS,
-            theme::INK_PRIMARY,
-            theme::INK_PRIMARY,
-        ),
-        ButtonTone::Secondary => (
-            theme::SHADE_DEEP,
-            theme::BORDER_MATTE,
-            theme::INK_SECONDARY,
-            theme::BORDER_REGAL,
-        ),
-        ButtonTone::Warn { active } => (
-            if active {
-                theme::SHADE_REGAL
-            } else {
-                theme::SHADE_DEEP
-            },
-            theme::BORDER_WARN,
-            theme::INK_WARN,
-            theme::INK_WARN,
-        ),
-        ButtonTone::Danger => (
-            theme::SHADE_DEEP,
-            theme::BORDER_DANGER,
-            theme::INK_DANGER,
-            theme::INK_DANGER,
-        ),
-    };
-
-    let mut d = div()
-        .id(id.into())
-        .px_3()
-        .py_1p5()
-        .rounded_md()
-        .bg(rgb(bg))
-        .border_1()
-        .border_color(rgb(border))
-        .text_xs()
-        .text_color(rgb(fg))
-        .whitespace_nowrap()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_1p5()
-        .cursor_pointer()
-        .hover(move |s| {
-            let styled = if matches!(tone, ButtonTone::Secondary) {
-                s.bg(rgb(theme::SHADE_REGAL))
-                    .text_color(rgb(theme::INK_PRIMARY))
-            } else {
-                s.bg(rgb(if matches!(tone, ButtonTone::Danger) {
-                    theme::SHADE_BASE
-                } else {
-                    theme::SHADE_REGAL
-                }))
-            };
-            styled.border_color(rgb(hover_border)).opacity(0.96)
-        });
-
-    if let Some(m) = ic {
-        d = d.child(icons::icon(m, 14.0, fg));
-    }
-    d.child(label.into())
-}
-
-pub fn primary_btn(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
-    icon_btn(id, None, label, ButtonTone::Primary)
-}
-
-pub fn secondary_btn(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
-    icon_btn(id, None, label, ButtonTone::Secondary)
-}
-
-/// Uniform archival paper-matte card (`SHADE_BASE`) with stacked full-width header rule.
-pub fn card_box(title: impl Into<SharedString>, subtitle: Option<&str>) -> Div {
-    let mut header = div()
-        .w_full()
-        .pb_2p5()
-        .border_b_1()
-        .border_color(rgb(theme::BORDER_SUBTLE))
-        .flex()
-        .flex_col()
-        .gap_0p5()
-        .flex_shrink_0()
-        .child(
-            div()
-                .w_full()
-                .text_sm()
-                .text_color(rgb(theme::INK_PRIMARY))
-                .child(title.into()),
-        );
-    if let Some(sub) = subtitle {
-        header = header.child(
-            div()
-                .w_full()
-                .text_xs()
-                .text_color(rgb(theme::INK_MUTED))
-                .child(sub.to_string()),
-        );
-    }
-
-    div()
-        .flex_shrink_0()
-        .flex()
-        .flex_col()
-        .gap_3p5()
-        .p_4()
-        .rounded_xl()
-        .bg(rgb(theme::SHADE_BASE))
-        .border_1()
-        .border_color(rgb(theme::BORDER_MATTE))
-        .child(header)
-}
-
-/// Recessed `SHADE_DEEP` container nested inside `SHADE_BASE` cards for crisp tonal layering.
-pub fn recessed_well() -> Div {
-    div()
-        .flex_shrink_0()
-        .p_3()
-        .rounded_lg()
-        .bg(rgb(theme::SHADE_DEEP))
-        .border_1()
-        .border_color(rgb(theme::BORDER_SUBTLE))
-}
-
-/// Recessed matte metric tile (`SHADE_DEEP` inside `SHADE_BASE` card).
-pub fn stat_tile(label: &str, value: impl Into<SharedString>, value_color: u32) -> Div {
-    div()
-        .min_w(px(145.0))
-        .flex_shrink_0()
-        .flex()
-        .flex_col()
-        .gap_1()
-        .p_2p5()
-        .px_3()
-        .rounded_lg()
-        .bg(rgb(theme::SHADE_DEEP))
-        .border_1()
-        .border_color(rgb(theme::BORDER_SUBTLE))
-        .child(
-            div()
-                .text_size(px(10.0))
-                .text_color(rgb(theme::INK_MUTED))
-                .child(label.to_string()),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(rgb(value_color))
-                .child(value.into()),
-        )
-}
-
-pub struct DropdownChoice {
-    pub label: SharedString,
-    pub swatch: Option<u32>,
-    pub icon: Option<MaterialIcon>,
-    pub selected: bool,
-}
-
-fn swatch_square(color_u32: u32) -> Div {
-    div()
-        .w(px(11.0))
-        .h(px(11.0))
-        .rounded_sm()
-        .bg(rgb(color_u32))
-        .border_1()
-        .border_color(rgb(theme::BORDER_REGAL))
-        .flex_shrink_0()
-}
-
-fn linear_to_srgb_u8(v: f32) -> u8 {
-    (v.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0).round() as u8
 }
 
 impl ReaulaGui {
-    /// Clean Regal Navy paper-matte dropdown select with deferred anchored popup.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn render_dropdown<F>(
-        &self,
-        id: DropdownId,
-        caption: Option<&str>,
-        current_label: impl Into<SharedString>,
-        current_swatch: Option<u32>,
-        current_icon: Option<MaterialIcon>,
-        width_px: f32,
-        choices: Vec<DropdownChoice>,
-        on_select: F,
-        cx: &mut Context<Self>,
-    ) -> Div
-    where
-        F: Fn(&mut Self, usize, &mut Context<Self>) + 'static,
-    {
-        let is_open = self.open_dropdown == Some(id);
-        let id_num = id as usize;
-        let handler = Rc::new(on_select);
-
-        let mut trigger_left = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap_2()
-            .flex_1()
-            .min_w_0();
-        if let Some(sw) = current_swatch {
-            trigger_left = trigger_left.child(swatch_square(sw));
-        }
-        if let Some(ic) = current_icon {
-            trigger_left = trigger_left.child(icons::icon(ic, 14.0, theme::INK_ACCENT));
-        }
-        trigger_left = trigger_left.child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .text_xs()
-                .text_color(rgb(theme::INK_PRIMARY))
-                .child(current_label.into()),
-        );
-
-        let trigger = div()
-            .id(("dd-trig", id_num))
-            .w(px(width_px))
-            .h(px(32.0))
-            .px_2p5()
-            .rounded_md()
-            .bg(rgb(if is_open {
-                theme::SHADE_REGAL
-            } else {
-                theme::SHADE_DEEP
-            }))
-            .border_1()
-            .border_color(rgb(if is_open {
-                theme::BORDER_FOCUS
-            } else {
-                theme::BORDER_MATTE
-            }))
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .gap_2()
-            .cursor_pointer()
-            .hover(|s| {
-                s.bg(rgb(theme::SHADE_REGAL))
-                    .border_color(rgb(theme::BORDER_REGAL))
-            })
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.open_dropdown = if this.open_dropdown == Some(id) {
-                    None
-                } else {
-                    Some(id)
-                };
-                cx.notify();
-            }))
-            .child(trigger_left)
-            .child(icons::icon(
-                if is_open {
-                    MaterialIcon::ExpandLess
-                } else {
-                    MaterialIcon::ExpandMore
-                },
-                16.0,
-                theme::INK_SECONDARY,
-            ));
-
-        let mut container = div().flex().flex_col().gap_1().flex_shrink_0();
-        if let Some(cap) = caption {
-            container = container.child(
-                div()
-                    .text_size(px(10.5))
-                    .text_color(rgb(theme::INK_MUTED))
-                    .child(cap.to_string()),
-            );
-        }
-        container = container.child(trigger);
-
-        if is_open {
-            let mut menu_list = div()
-                .id(("dd-scroll", id_num))
-                .w(px(width_px.max(190.0)))
-                .max_h(px(248.0))
-                .overflow_y_scroll()
-                .rounded_lg()
-                .bg(rgb(theme::SHADE_BASE))
-                .border_1()
-                .border_color(rgb(theme::BORDER_REGAL))
-                .p_1()
-                .flex()
-                .flex_col()
-                .gap_0p5()
-                .occlude()
-                .shadow(vec![BoxShadow {
-                    color: rgba(0x060c16cc).into(),
-                    offset: point(px(0.0), px(10.0)),
-                    blur_radius: px(22.0),
-                    spread_radius: px(0.0),
-                }])
-                .on_mouse_down_out(cx.listener(move |this, _, _, cx| {
-                    if this.open_dropdown == Some(id) {
-                        this.open_dropdown = None;
-                        cx.notify();
-                    }
-                }));
-
-            for (idx, choice) in choices.into_iter().enumerate() {
-                let h = Rc::clone(&handler);
-                let mut item = div()
-                    .id(("dd-opt", id_num * 256 + idx))
-                    .px_2p5()
-                    .py_1p5()
-                    .rounded_md()
-                    .bg(rgb(if choice.selected {
-                        theme::SHADE_REGAL
-                    } else {
-                        theme::SHADE_BASE
-                    }))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    .gap_2()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(rgb(theme::SHADE_REGAL)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.open_dropdown = None;
-                        h(this, idx, cx);
-                        cx.notify();
-                    }));
-
-                let mut item_left = div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .flex_1()
-                    .min_w_0();
-                if let Some(sw) = choice.swatch {
-                    item_left = item_left.child(swatch_square(sw));
-                }
-                if let Some(ic) = choice.icon {
-                    item_left = item_left.child(icons::icon(ic, 14.0, theme::INK_SECONDARY));
-                }
-                item_left = item_left.child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_xs()
-                        .text_color(rgb(if choice.selected {
-                            theme::INK_PRIMARY
-                        } else {
-                            theme::INK_SECONDARY
-                        }))
-                        .child(choice.label),
-                );
-                item = item.child(item_left);
-                if choice.selected {
-                    item = item.child(icons::icon(MaterialIcon::Check, 14.0, theme::INK_ACCENT));
-                }
-                menu_list = menu_list.child(item);
-            }
-
-            container = container.child(
-                div().relative().h(px(0.0)).child(
-                    deferred(
-                        anchored()
-                            .anchor(Corner::TopLeft)
-                            .offset(point(px(0.0), px(4.0)))
-                            .snap_to_window_with_margin(px(8.0))
-                            .child(menu_list),
-                    )
-                    .with_priority(40),
-                ),
-            );
-        }
-
-        container
-    }
-
     pub(crate) fn render_keyboard_canvas(
         &self,
         state: &ConnectedState,
@@ -574,6 +130,7 @@ impl ReaulaGui {
         time_s: f32,
         cx: &mut Context<Self>,
     ) -> Div {
+        let hc = HardwareColors::from_app(cx);
         let board_w = KEYBOARD_CANVAS_WIDTH as f32 * scale + 28.0;
         let board_h = KEYBOARD_CANVAS_HEIGHT as f32 * scale + 28.0;
 
@@ -612,59 +169,44 @@ impl ReaulaGui {
 
         let mut canvas = div()
             .relative()
-            .mt(px(18.0))
+            .mt(px(16.0))
             .w(px(board_w))
             .h(px(board_h))
             .flex_shrink_0()
             .rounded_xl()
-            .bg(rgb(theme::SHADE_DEEP))
+            .bg(rgb(hc.deck_bg))
             .border_1()
-            .border_color(rgb(theme::BORDER_MATTE))
-            // WIN 60 HE rear-left USB Type-C plug housing + braided wire stub
+            .border_color(rgb(hc.deck_border))
             .child(
                 div()
                     .absolute()
                     .left(px(14.0 + 46.0 * scale))
-                    .top(px(-10.0))
+                    .top(px(-9.0))
                     .w(px(22.0))
-                    .h(px(10.0))
+                    .h(px(9.0))
                     .rounded_t_sm()
-                    .bg(rgb(theme::SHADE_REGAL))
+                    .bg(rgb(hc.key_selected_bg))
                     .border_1()
-                    .border_color(rgb(theme::BORDER_MATTE)),
+                    .border_color(rgb(hc.deck_border)),
             )
             .child(
                 div()
                     .absolute()
-                    .left(px(14.0 + 46.0 * scale + 8.0))
-                    .top(px(-20.0))
-                    .w(px(6.0))
-                    .h(px(10.0))
-                    .rounded_t_sm()
-                    .bg(rgb(theme::SHADE_BASE))
-                    .border_1()
-                    .border_color(rgb(theme::BORDER_SUBTLE)),
-            )
-            // WIN 60 HE left-edge strap/lanyard lug visual detail
-            .child(
-                div()
-                    .absolute()
-                    .left(px(-9.0))
+                    .left(px(-8.0))
                     .top(px(15.0))
-                    .w(px(9.0))
+                    .w(px(8.0))
                     .h(px(62.0 * scale * 0.85))
                     .rounded_l_md()
-                    .bg(rgb(theme::SHADE_BASE))
+                    .bg(rgb(hc.key_bg))
                     .border_1()
-                    .border_color(rgb(theme::BORDER_MATTE)),
+                    .border_color(rgb(hc.deck_border)),
             )
-            // Bottom-right subtle embossed AULA emblem indicator
             .child(
                 div()
                     .absolute()
                     .right(px(18.0))
                     .bottom(px(4.0))
-                    .text_color(rgb(theme::INK_DIM))
+                    .text_color(rgb(hc.key_dim_ink))
                     .text_size(px(8.5))
                     .child("AULA"),
             );
@@ -696,55 +238,49 @@ impl ReaulaGui {
                             _ => format!("{cfg_mm:.2}"),
                         },
                     };
-                    let bg: Hsla = if let Some(m) = live_mm {
-                        theme::depth_matte_hsla(m, state.max_mm)
+                    let bg = if let Some(m) = live_mm {
+                        theme::depth_fill_hsla(m, state.max_mm, hc.is_dark)
                     } else if is_selected {
-                        rgb(theme::SHADE_REGAL).into()
+                        rgb(hc.key_selected_bg).into()
                     } else {
-                        rgb(theme::SHADE_BASE).into()
+                        rgb(hc.key_bg).into()
                     };
                     let border = if is_focused || live_mm.is_some() {
-                        theme::BORDER_FOCUS
+                        hc.key_border_focus
                     } else if is_selected {
-                        theme::BORDER_REGAL
+                        hc.key_border_selected
                     } else {
-                        theme::BORDER_SUBTLE
+                        hc.key_border
                     };
-                    let sub_c = if live_mm.is_some() {
-                        theme::INK_PRIMARY
-                    } else if act.is_some_and(|c| c.mode != TriggerMode::Fixed) {
-                        theme::INK_ACCENT
+                    let sub_c = if live_mm.is_some() || act.is_some_and(|c| c.mode != TriggerMode::Fixed) {
+                        hc.key_ink
                     } else {
-                        theme::INK_MUTED
+                        hc.key_sub_ink
                     };
-                    (bg, border, theme::INK_PRIMARY, sub, sub_c)
+                    (bg, border, hc.key_ink, sub, sub_c)
                 }
                 KeyboardCanvasMode::Calibration => {
-                    let bg: Hsla = if is_cal_done {
-                        rgb(theme::SHADE_REGAL).into()
+                    let bg = if is_cal_done {
+                        rgb(hc.ok_bg).into()
                     } else {
-                        rgb(theme::SHADE_BASE).into()
+                        rgb(hc.key_bg).into()
                     };
                     let border = if is_cal_done {
-                        theme::BORDER_FOCUS
+                        hc.ok_border
                     } else if state.cal_active {
-                        theme::BORDER_WARN
+                        hc.warn_border
                     } else {
-                        theme::BORDER_SUBTLE
+                        hc.key_border
                     };
-                    let sub = if is_cal_done {
-                        "OK".into()
-                    } else {
-                        "—".into()
-                    };
+                    let sub = if is_cal_done { "OK".into() } else { "-".into() };
                     let sub_c = if is_cal_done {
-                        theme::INK_OK
+                        hc.ok_ink
                     } else if state.cal_active {
-                        theme::INK_WARN
+                        hc.warn_ink
                     } else {
-                        theme::INK_DIM
+                        hc.key_dim_ink
                     };
-                    (bg, border, theme::INK_PRIMARY, sub, sub_c)
+                    (bg, border, hc.key_ink, sub, sub_c)
                 }
                 KeyboardCanvasMode::ColorMockup => {
                     let lin = preview_colors
@@ -757,19 +293,19 @@ impl ReaulaGui {
                         linear_to_srgb_u8(lin[2]),
                     ];
                     let bg_u32 = pack_rgb_u32([
-                        (srgb_arr[0] as u16 / 2 + 16) as u8,
-                        (srgb_arr[1] as u16 / 2 + 27) as u8,
-                        (srgb_arr[2] as u16 / 2 + 44) as u8,
+                        (srgb_arr[0] as u16 / 2 + 12) as u8,
+                        (srgb_arr[1] as u16 / 2 + 14) as u8,
+                        (srgb_arr[2] as u16 / 2 + 18) as u8,
                     ]);
                     let border = if is_focused {
-                        theme::BORDER_FOCUS
+                        hc.key_border_focus
                     } else if is_selected {
-                        theme::BORDER_REGAL
+                        hc.key_border_selected
                     } else {
                         pack_rgb_u32([
-                            srgb_arr[0].max(32),
-                            srgb_arr[1].max(54),
-                            srgb_arr[2].max(88),
+                            srgb_arr[0].max(36),
+                            srgb_arr[1].max(40),
+                            srgb_arr[2].max(48),
                         ])
                     };
                     let hex_sub = if let Some(slot_idx) = active_custom_slot {
@@ -780,13 +316,9 @@ impl ReaulaGui {
                     (
                         rgb(bg_u32).into(),
                         border,
-                        theme::INK_PRIMARY,
+                        0xF3F4F6,
                         hex_sub[..4].to_string(),
-                        pack_rgb_u32([
-                            srgb_arr[0].max(168),
-                            srgb_arr[1].max(178),
-                            srgb_arr[2].max(194),
-                        ]),
+                        0xD1D5DB,
                     )
                 }
                 KeyboardCanvasMode::HotkeyPicker => {
@@ -797,13 +329,14 @@ impl ReaulaGui {
                         fn_held,
                         &aqua_keys,
                         &aqua_pulsing,
+                        &hc,
                     );
                     hotkey_top_tag = vis.top_tag;
                     hotkey_bar = vis.bottom_bar;
                     (
                         rgb(vis.bg).into(),
                         vis.border,
-                        theme::INK_PRIMARY,
+                        hc.key_ink,
                         vis.sub_label,
                         vis.sub_color,
                     )
@@ -812,66 +345,66 @@ impl ReaulaGui {
                     let stat = state.switch_tests.get(&k.index);
                     if let Some(m) = live_mm {
                         (
-                            theme::depth_matte_hsla(m, state.max_mm),
-                            theme::BORDER_FOCUS,
-                            theme::INK_PRIMARY,
+                            theme::depth_fill_hsla(m, state.max_mm, hc.is_dark),
+                            hc.key_border_focus,
+                            hc.key_ink,
                             format!("{m:.2}"),
-                            theme::INK_PRIMARY,
+                            hc.key_ink,
                         )
                     } else if let Some(s) = stat {
                         if s.released_zero && s.peak_mm >= 0.30 {
                             (
-                                rgb(0x112b42).into(),
+                                rgb(hc.ok_bg).into(),
                                 if is_focused {
-                                    theme::BORDER_FOCUS
+                                    hc.key_border_focus
                                 } else {
-                                    theme::INK_OK
+                                    hc.ok_border
                                 },
-                                theme::INK_PRIMARY,
+                                hc.key_ink,
                                 format!("OK {:.1}", s.peak_mm),
-                                theme::INK_OK,
+                                hc.ok_ink,
                             )
                         } else if s.peak_mm > 0.05 {
                             (
-                                rgb(0x282117).into(),
+                                rgb(hc.warn_bg).into(),
                                 if is_focused {
-                                    theme::BORDER_FOCUS
+                                    hc.key_border_focus
                                 } else {
-                                    theme::BORDER_WARN
+                                    hc.warn_border
                                 },
-                                theme::INK_PRIMARY,
+                                hc.key_ink,
                                 format!("{:.2}?", s.peak_mm),
-                                theme::INK_WARN,
+                                hc.warn_ink,
                             )
                         } else {
                             (
-                                rgb(theme::SHADE_BASE).into(),
+                                rgb(hc.key_bg).into(),
                                 if is_focused {
-                                    theme::BORDER_FOCUS
+                                    hc.key_border_focus
                                 } else {
-                                    theme::BORDER_SUBTLE
+                                    hc.key_border
                                 },
-                                theme::INK_PRIMARY,
+                                hc.key_ink,
                                 "0.00".into(),
-                                theme::INK_DIM,
+                                hc.key_dim_ink,
                             )
                         }
                     } else {
                         (
                             rgb(if is_focused {
-                                theme::SHADE_REGAL
+                                hc.key_selected_bg
                             } else {
-                                theme::SHADE_BASE
+                                hc.key_bg
                             })
                             .into(),
                             if is_focused {
-                                theme::BORDER_FOCUS
+                                hc.key_border_focus
                             } else {
-                                theme::BORDER_SUBTLE
+                                hc.key_border
                             },
-                            theme::INK_PRIMARY,
-                            "—".into(),
-                            theme::INK_DIM,
+                            hc.key_ink,
+                            "-".into(),
+                            hc.key_dim_ink,
                         )
                     }
                 }
@@ -885,17 +418,17 @@ impl ReaulaGui {
                     .unwrap_or(0.0);
                 let frac = (measured / state.max_mm.max(0.5)).clamp(0.0, 1.0) as f32;
                 let bar_col = if live_mm.is_some() {
-                    theme::INK_ACCENT
+                    hc.dm_border
                 } else if state
                     .switch_tests
                     .get(&k.index)
                     .is_some_and(|s| s.released_zero && s.peak_mm >= 0.30)
                 {
-                    theme::INK_OK
+                    hc.ok_ink
                 } else if measured > 0.05 {
-                    theme::INK_WARN
+                    hc.warn_ink
                 } else {
-                    theme::BORDER_SUBTLE
+                    hc.key_border
                 };
                 Some((bar_col, None, frac))
             } else {
@@ -905,80 +438,76 @@ impl ReaulaGui {
             let key_index = k.index;
             let key_font_top = 9.5 * (scale / KB_SCALE_DEFAULT).clamp(0.85, 1.05);
             let mut key_tile = div()
-                    .id(("kb-key", (mode as usize) * 256 + usize::from(key_index)))
-                    .absolute()
-                    .left(px(kx))
-                    .top(px(ky))
-                    .w(px(kw))
-                    .h(px(kh))
-                    .rounded_md()
-                    .bg(key_bg)
-                    .border_1()
-                    .border_color(rgb(border_color))
-                    .px_1()
-                    .py_0p5()
-                    .flex()
-                    .flex_col()
-                    .justify_between()
-                    .cursor_pointer()
-                    .hover(|s| s.border_color(rgb(theme::BORDER_FOCUS)))
-                    .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
-                        this.on_canvas_key_click(mode, key_index, ev, cx);
-                    }))
-                    .on_mouse_down(
-                        MouseButton::Right,
-                        cx.listener(move |this, _, _, cx| {
-                            if mode == KeyboardCanvasMode::ColorMockup
-                                && let Ok(st) = &mut this.conn
-                                && let Some(slot_idx) = st.light_tab.custom_slot_index()
-                            {
-                                st.custom_brush =
-                                    st.custom_slots[usize::from(slot_idx)][key_index as usize];
-                                this.status_line = format!(
-                                    "Sampled color {} from key {}.",
-                                    format_rgb_hex(st.custom_brush),
-                                    k.name
-                                );
-                                cx.notify();
-                            }
+                .id(("kb-key", (mode as usize) * 256 + usize::from(key_index)))
+                .absolute()
+                .left(px(kx))
+                .top(px(ky))
+                .w(px(kw))
+                .h(px(kh))
+                .rounded(cx.theme().radius)
+                .bg(key_bg)
+                .border_1()
+                .border_color(rgb(border_color))
+                .px_1()
+                .py_0p5()
+                .flex()
+                .flex_col()
+                .justify_between()
+                .cursor_pointer()
+                .hover(|s| s.border_color(rgb(hc.key_border_focus)))
+                .on_click(cx.listener(move |this, ev: &ClickEvent, window, cx| {
+                    this.on_canvas_key_click(mode, key_index, ev, window, cx);
+                }))
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, _, window, cx| {
+                        if mode == KeyboardCanvasMode::ColorMockup
+                            && let Ok(st) = &mut this.conn
+                            && let Some(slot_idx) = st.light_tab.custom_slot_index()
+                        {
+                            let brush = st.custom_slots[usize::from(slot_idx)][key_index as usize];
+                            st.custom_brush = brush;
+                            this.status_line = format!(
+                                "Sampled {} from key {}.",
+                                format_rgb_hex(brush),
+                                k.name
+                            );
+                            this.sync_color_pickers_from_state(window, cx);
+                            cx.notify();
+                        }
+                    }),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .justify_between()
+                        .gap_0p5()
+                        .child(
+                            div()
+                                .text_size(px(key_font_top))
+                                .text_color(rgb(top_line))
+                                .child(k.name),
+                        )
+                        .when_some(hotkey_top_tag, |row, (tag, tag_col)| {
+                            row.child(div().text_size(px(7.5)).text_color(rgb(tag_col)).child(tag))
                         }),
-                    )
-                    .child(
-                        div()
-                            .w_full()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .justify_between()
-                            .gap_0p5()
-                            .child(
-                                div()
-                                    .text_size(px(key_font_top))
-                                    .text_color(rgb(top_line))
-                                    .child(k.name),
-                            )
-                            .when_some(hotkey_top_tag, |row, (tag, tag_col)| {
-                                row.child(
-                                    div()
-                                        .text_size(px(7.5))
-                                        .text_color(rgb(tag_col))
-                                        .child(tag),
-                                )
-                            }),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(8.5 * (scale / KB_SCALE_DEFAULT).clamp(0.85, 1.05)))
-                            .text_color(rgb(sub_color))
-                            .child(sub_label),
-                    );
+                )
+                .child(
+                    div()
+                        .text_size(px(8.5 * (scale / KB_SCALE_DEFAULT).clamp(0.85, 1.05)))
+                        .text_color(rgb(sub_color))
+                        .child(sub_label),
+                );
             if let Some((left_col, right_col, frac)) = bottom_bar_fill {
                 let track_w = (kw - 6.0).max(4.0);
                 let mut bar = div()
                     .w_full()
                     .h(px(2.5))
                     .rounded_xs()
-                    .bg(rgb(0x0b1424))
+                    .bg(rgb(hc.track_bg))
                     .overflow_hidden()
                     .flex()
                     .flex_row();
@@ -987,7 +516,12 @@ impl ReaulaGui {
                         .child(div().flex_1().h_full().bg(rgb(left_col)))
                         .child(div().flex_1().h_full().bg(rgb(rc)));
                 } else {
-                    bar = bar.child(div().w(px((track_w * frac).max(0.0))).h_full().bg(rgb(left_col)));
+                    bar = bar.child(
+                        div()
+                            .w(px((track_w * frac).max(0.0)))
+                            .h_full()
+                            .bg(rgb(left_col)),
+                    );
                 }
                 key_tile = key_tile.child(bar);
             }
@@ -1000,7 +534,7 @@ impl ReaulaGui {
             .flex()
             .justify_center()
             .py_1()
-            .pl_3()
+            .pl_2()
             .child(canvas)
     }
 
@@ -1009,99 +543,102 @@ impl ReaulaGui {
         mode: KeyboardCanvasMode,
         key_index: u8,
         ev: &ClickEvent,
+        window: &mut gpui_kit::Window,
         cx: &mut Context<Self>,
     ) {
-        let Ok(state) = &mut self.conn else {
-            return;
-        };
-        match mode {
-            KeyboardCanvasMode::Calibration => {}
-            KeyboardCanvasMode::HotkeyPicker => {
-                if key_index == reaula_core::keymap::idx::FN {
-                    self.status_line =
-                        "Fn (#122) is reserved for Hardware Firmware [FW] Flash — choose another key for Trigger or Daemon Modifier."
-                            .into();
-                } else if ev.modifiers().shift {
-                    if state.draft_category == KeymapCategory::FirmwareFnFlash {
-                        self.status_line =
-                            "Firmware Flash locks modifier to Fn — switch Composer to Daemon Level for custom modifiers.".into();
+        let mut sync_main = false;
+        let mut sync_keymaps = false;
+        {
+            let Ok(state) = &mut self.conn else {
+                return;
+            };
+            match mode {
+                KeyboardCanvasMode::Calibration => {}
+                KeyboardCanvasMode::HotkeyPicker => {
+                    if key_index == reaula_core::keymap::idx::FN {
+                        self.status_line = "Fn (#122) is reserved for Firmware [FW] Flash.".into();
+                    } else if ev.modifiers().shift {
+                        if state.draft_category == KeymapCategory::FirmwareFnFlash {
+                            self.status_line =
+                                "Firmware Flash uses Fn; switch to Daemon Level for custom modifiers."
+                                    .into();
+                        } else {
+                            state.draft_rule_modifier = Some(key_index);
+                            sync_keymaps = true;
+                            if let Some(k) = reaula_core::keymap::by_index(key_index) {
+                                self.status_line =
+                                    format!("Daemon modifier: {} (#{key_index})", k.name);
+                            }
+                        }
                     } else {
-                        state.draft_rule_modifier = Some(key_index);
+                        state.draft_rule_key = key_index;
+                        match state.keymap_layer_view {
+                            KeymapLayerView::FirmwareOnly => {
+                                state.set_keymap_draft_category(KeymapCategory::FirmwareFnFlash);
+                            }
+                            KeymapLayerView::DaemonOnly => {
+                                state.set_keymap_draft_category(KeymapCategory::DaemonMemory);
+                            }
+                            KeymapLayerView::Both => {}
+                        }
+                        sync_keymaps = true;
+                        let fw = state.keyboard_fn_map.get(&key_index).map(|&hid| {
+                            format!("FW: Fn+Key -> {}", reaula_core::keymap::usb_hid_name(hid))
+                        });
+                        let dm = state
+                            .shortcut_rules
+                            .iter()
+                            .find(|r| r.trigger_key == key_index)
+                            .map(|r| format!("DM: {} ({})", r.gesture_label(), r.action.summary()));
                         if let Some(k) = reaula_core::keymap::by_index(key_index) {
-                            self.status_line = format!(
-                                "Daemon chord modifier set to {} (slot {})",
-                                k.name, key_index
-                            );
+                            self.status_line = match (fw, dm) {
+                                (Some(f), Some(d)) => format!("{} (#{key_index}): {f} | {d}", k.name),
+                                (Some(f), None) => format!("{} (#{key_index}): {f}", k.name),
+                                (None, Some(d)) => format!("{} (#{key_index}): {d}", k.name),
+                                (None, None) => format!("{} (#{key_index}): unmapped", k.name),
+                            };
                         }
-                    }
-                } else {
-                    state.draft_rule_key = key_index;
-                    match state.keymap_layer_view {
-                        KeymapLayerView::FirmwareOnly => {
-                            state.set_keymap_draft_category(KeymapCategory::FirmwareFnFlash);
-                        }
-                        KeymapLayerView::DaemonOnly => {
-                            state.set_keymap_draft_category(KeymapCategory::DaemonMemory);
-                        }
-                        KeymapLayerView::Both => {}
-                    }
-                    let fw = state
-                        .keyboard_fn_map
-                        .get(&key_index)
-                        .map(|&hid| format!("FW: Fn+Key -> {}", reaula_core::keymap::usb_hid_name(hid)));
-                    let dm = state
-                        .shortcut_rules
-                        .iter()
-                        .find(|r| r.trigger_key == key_index)
-                        .map(|r| format!("DM: {} ({})", r.gesture_label(), r.action.summary()));
-                    if let Some(k) = reaula_core::keymap::by_index(key_index) {
-                        self.status_line = match (fw, dm) {
-                            (Some(f), Some(d)) => {
-                                format!("Selected {} (#{key_index}) — {f}  |  {d}", k.name)
-                            }
-                            (Some(f), None) => format!("Selected {} (#{key_index}) — {f}", k.name),
-                            (None, Some(d)) => format!("Selected {} (#{key_index}) — {d}", k.name),
-                            (None, None) => {
-                                format!("Selected {} (#{key_index}) — unmapped", k.name)
-                            }
-                        };
                     }
                 }
-            }
-            KeyboardCanvasMode::ColorMockup => {
-                if let Some(slot_idx) = state.light_tab.custom_slot_index()
-                    && state.custom_paint_mode
-                {
-                    state.custom_slots[usize::from(slot_idx)][key_index as usize] =
-                        state.custom_brush;
-                    state.focused_key = key_index;
+                KeyboardCanvasMode::ColorMockup => {
+                    if let Some(slot_idx) = state.light_tab.custom_slot_index()
+                        && state.custom_paint_mode
+                    {
+                        state.custom_slots[usize::from(slot_idx)][key_index as usize] =
+                            state.custom_brush;
+                        state.focused_key = key_index;
+                        self.dirty_3d = true;
+                        cx.notify();
+                        return;
+                    }
+                    apply_key_selection(state, key_index, ev);
                     self.dirty_3d = true;
-                    cx.notify();
-                    return;
                 }
-                apply_key_selection(state, key_index, ev);
-                self.dirty_3d = true;
-            }
-            KeyboardCanvasMode::ActuationAndTravel => {
-                apply_key_selection(state, key_index, ev);
-                self.dirty_3d = true;
-            }
-            KeyboardCanvasMode::DiagnosticsDepth => {
-                state.focused_key = key_index;
-                self.dirty_switch_3d = true;
-                if let Some(k) = reaula_core::keymap::by_index(key_index) {
-                    self.status_line =
-                        format!("Inspecting Hall-effect switch {} (#{}).", k.name, key_index);
+                KeyboardCanvasMode::ActuationAndTravel => {
+                    apply_key_selection(state, key_index, ev);
+                    self.dirty_3d = true;
+                    sync_main = true;
+                }
+                KeyboardCanvasMode::DiagnosticsDepth => {
+                    state.focused_key = key_index;
+                    self.dirty_switch_3d = true;
+                    if let Some(k) = reaula_core::keymap::by_index(key_index) {
+                        self.status_line = format!("Inspecting {} (#{}).", k.name, key_index);
+                    }
                 }
             }
+        }
+        if sync_main {
+            self.sync_main_controls_from_state(window, cx);
+        }
+        if sync_keymaps {
+            self.sync_keymap_controls_from_state(window, cx);
         }
         cx.notify();
     }
 }
 
-/// 2D cutaway cross-section schematic mimicking the Hall-effect switch mechanism.
-/// Serves both as a manual `2D` inspection view and automatic fallback when `wgpu` is unavailable.
-pub fn render_switch_2d_cross_section(spec: &SwitchInspectionSnapshot) -> Div {
+pub fn render_switch_2d_cross_section(spec: &SwitchInspectionSnapshot, hc: &HardwareColors) -> Div {
     let max_mm = spec.max_mm.max(0.5);
     let travel_frac = (spec.travel_mm / max_mm).clamp(0.0, 1.0) as f32;
     let act_frac = (spec.actuation_mm / max_mm).clamp(0.02, 0.98) as f32;
@@ -1112,14 +649,13 @@ pub fn render_switch_2d_cross_section(spec: &SwitchInspectionSnapshot) -> Div {
 
     let stem_hex = stem_color_hex_for_switch(spec.switch_id);
     let act_col = if spec.triggered {
-        theme::INK_OK
+        hc.ok_ink
     } else if spec.rapid_trigger {
-        0xa855f7
+        0xA855F7
     } else {
-        theme::INK_ACCENT
+        hc.dm_border
     };
 
-    // Vertical stack anchors inside the 320 x 288 cutaway viewport
     let chamber_left = 86.0_f32;
     let chamber_w = 148.0_f32;
     let magnet_rest_bot = 152.0_f32;
@@ -1127,7 +663,6 @@ pub fn render_switch_2d_cross_section(spec: &SwitchInspectionSnapshot) -> Div {
     let pcb_top_y = 242.0_f32;
     let act_line_y = magnet_rest_bot + act_offset_px;
 
-    // Compressing coil spring stack between bottom PCB seat and plunger flange
     let plunger_bot_y = 118.0_f32 + travel_px;
     let spring_bot_y = 228.0_f32;
     let spring_span = (spring_bot_y - plunger_bot_y).max(20.0);
@@ -1138,31 +673,26 @@ pub fn render_switch_2d_cross_section(spec: &SwitchInspectionSnapshot) -> Div {
         .w(px(330.0))
         .h(px(288.0))
         .rounded_lg()
-        .bg(rgb(0x070f1d))
+        .bg(rgb(hc.deck_bg))
         .border_1()
-        .border_color(rgb(theme::BORDER_SUBTLE))
+        .border_color(rgb(hc.deck_border))
         .overflow_hidden()
-        // Top-left technical schematic header label
         .child(
             div()
                 .absolute()
                 .left(px(10.0))
                 .top(px(8.0))
                 .text_size(px(10.0))
-                .text_color(rgb(theme::INK_MUTED))
-                .child(format!(
-                    "2D CROSS-SECTION · {} ({})",
-                    spec.key_name, spec.switch_label
-                )),
+                .text_color(rgb(hc.key_sub_ink))
+                .child(format!("2D CUTAWAY · {} ({})", spec.key_name, spec.switch_label)),
         )
-        // Left-side millimeter ruler gauge (0.00 -> max_mm)
         .child(
             div()
                 .absolute()
                 .left(px(12.0))
                 .top(px(magnet_rest_bot - 6.0))
                 .text_size(px(9.5))
-                .text_color(rgb(theme::INK_DIM))
+                .text_color(rgb(hc.key_dim_ink))
                 .child("0.00"),
         )
         .child(
@@ -1172,7 +702,7 @@ pub fn render_switch_2d_cross_section(spec: &SwitchInspectionSnapshot) -> Div {
                 .top(px(magnet_rest_bot))
                 .w(px(2.0))
                 .h(px(max_stroke_px))
-                .bg(rgb(theme::BORDER_MATTE)),
+                .bg(rgb(hc.key_border)),
         )
         .child(
             div()
@@ -1180,10 +710,9 @@ pub fn render_switch_2d_cross_section(spec: &SwitchInspectionSnapshot) -> Div {
                 .left(px(12.0))
                 .top(px(magnet_rest_bot + max_stroke_px - 6.0))
                 .text_size(px(9.5))
-                .text_color(rgb(theme::INK_DIM))
+                .text_color(rgb(hc.key_dim_ink))
                 .child(format!("{max_mm:.2}")),
         )
-        // Live stem depth tick on ruler
         .child(
             div()
                 .absolute()
@@ -1194,7 +723,6 @@ pub fn render_switch_2d_cross_section(spec: &SwitchInspectionSnapshot) -> Div {
                 .rounded_xs()
                 .bg(rgb(act_col)),
         )
-        // Cutaway Housing Outer & Inner Side Walls (translucent PC top + Nylon bottom)
         .child(
             div()
                 .absolute()
@@ -1203,9 +731,9 @@ pub fn render_switch_2d_cross_section(spec: &SwitchInspectionSnapshot) -> Div {
                 .w(px(14.0))
                 .h(px(56.0))
                 .rounded_tl_md()
-                .bg(rgb(0x475e7d))
+                .bg(rgb(0x4B5563))
                 .border_1()
-                .border_color(rgb(0x7c97ba)),
+                .border_color(rgb(0x9CA3AF)),
         )
         .child(
             div()
@@ -1215,9 +743,9 @@ pub fn render_switch_2d_cross_section(spec: &SwitchInspectionSnapshot) -> Div {
                 .w(px(14.0))
                 .h(px(56.0))
                 .rounded_tr_md()
-                .bg(rgb(0x475e7d))
+                .bg(rgb(0x4B5563))
                 .border_1()
-                .border_color(rgb(0x7c97ba)),
+                .border_color(rgb(0x9CA3AF)),
         )
         .child(
             div()
@@ -1226,9 +754,9 @@ pub fn render_switch_2d_cross_section(spec: &SwitchInspectionSnapshot) -> Div {
                 .top(px(152.0))
                 .w(px(14.0))
                 .h(px(90.0))
-                .bg(rgb(0x1b293f))
+                .bg(rgb(0x272E3B))
                 .border_1()
-                .border_color(rgb(theme::BORDER_MATTE)),
+                .border_color(rgb(hc.key_border)),
         )
         .child(
             div()
@@ -1237,11 +765,10 @@ pub fn render_switch_2d_cross_section(spec: &SwitchInspectionSnapshot) -> Div {
                 .top(px(152.0))
                 .w(px(14.0))
                 .h(px(90.0))
-                .bg(rgb(0x1b293f))
+                .bg(rgb(0x272E3B))
                 .border_1()
-                .border_color(rgb(theme::BORDER_MATTE)),
+                .border_color(rgb(hc.key_border)),
         )
-        // Chamber interior backdrop
         .child(
             div()
                 .absolute()
@@ -1249,10 +776,9 @@ pub fn render_switch_2d_cross_section(spec: &SwitchInspectionSnapshot) -> Div {
                 .top(px(104.0))
                 .w(px(chamber_w - 28.0))
                 .h(px(pcb_top_y - 104.0))
-                .bg(rgb(0x0b1526)),
+                .bg(rgb(0x11151C)),
         );
 
-    // Compressing metallic coil spring segments
     for c in 0..coils {
         let frac = (c as f32 + 0.5) / (coils as f32);
         let y = plunger_bot_y + frac * spring_span;
@@ -1265,12 +791,11 @@ pub fn render_switch_2d_cross_section(spec: &SwitchInspectionSnapshot) -> Div {
                 .w(px(chamber_w - 88.0))
                 .h(px(3.5))
                 .rounded_xs()
-                .bg(rgb(0xd8b468)),
+                .bg(rgb(0xD8B468)),
         );
     }
 
-    // Actuation threshold laser line + right label
-    stage = stage
+    stage
         .child(
             div()
                 .absolute()
@@ -1287,9 +812,8 @@ pub fn render_switch_2d_cross_section(spec: &SwitchInspectionSnapshot) -> Div {
                 .top(px(act_line_y - 7.0))
                 .text_size(px(9.5))
                 .text_color(rgb(act_col))
-                .child(format!("ACT {:.2} mm", spec.actuation_mm)),
+                .child(format!("ACT {:.2}", spec.actuation_mm)),
         )
-        // Moving Keycap Crown & Cutaway Skirt
         .child(
             div()
                 .absolute()
@@ -1298,17 +822,16 @@ pub fn render_switch_2d_cross_section(spec: &SwitchInspectionSnapshot) -> Div {
                 .w(px(chamber_w + 16.0))
                 .h(px(26.0))
                 .rounded_t_md()
-                .bg(rgb(0x213657))
+                .bg(rgb(0x232936))
                 .border_1()
-                .border_color(rgb(theme::BORDER_REGAL))
+                .border_color(rgb(0x6B7280))
                 .flex()
                 .items_center()
                 .justify_center()
                 .text_size(px(10.5))
-                .text_color(rgb(theme::INK_PRIMARY))
+                .text_color(rgb(0xF3F4F6))
                 .child(spec.key_name),
         )
-        // Moving POM Cross Stem + Plunger
         .child(
             div()
                 .absolute()
@@ -1328,7 +851,6 @@ pub fn render_switch_2d_cross_section(spec: &SwitchInspectionSnapshot) -> Div {
                 .rounded_sm()
                 .bg(rgb(stem_hex)),
         )
-        // Moving Neodymium Magnet [S (silver) | N (red)] embedded in plunger base
         .child(
             div()
                 .absolute()
@@ -1337,7 +859,7 @@ pub fn render_switch_2d_cross_section(spec: &SwitchInspectionSnapshot) -> Div {
                 .w(px(24.0))
                 .h(px(12.0))
                 .rounded_t_xs()
-                .bg(rgb(0xcbd5e1)),
+                .bg(rgb(0xCBD5E1)),
         )
         .child(
             div()
@@ -1347,24 +869,7 @@ pub fn render_switch_2d_cross_section(spec: &SwitchInspectionSnapshot) -> Div {
                 .w(px(24.0))
                 .h(px(12.0))
                 .rounded_b_xs()
-                .bg(rgb(0xef4444)),
-        )
-        // Magnetic flux halo + SMD Hall-Effect Sensor IC + FR-4 PCB Deck
-        .child(
-            div()
-                .absolute()
-                .left(px(chamber_left + chamber_w * 0.5 - (18.0 + 18.0 * travel_frac)))
-                .top(px(pcb_top_y - 14.0))
-                .w(px((18.0 + 18.0 * travel_frac) * 2.0))
-                .h(px(14.0))
-                .rounded_t_md()
-                .bg(rgb(if spec.triggered {
-                    0x104f46
-                } else if travel_frac > 0.05 {
-                    0x123e68
-                } else {
-                    0x0c1b2e
-                })),
+                .bg(rgb(0xEF4444)),
         )
         .child(
             div()
@@ -1374,7 +879,7 @@ pub fn render_switch_2d_cross_section(spec: &SwitchInspectionSnapshot) -> Div {
                 .w(px(32.0))
                 .h(px(9.0))
                 .rounded_t_xs()
-                .bg(rgb(0x161c28))
+                .bg(rgb(0x181E29))
                 .border_1()
                 .border_color(rgb(act_col)),
         )
@@ -1386,22 +891,20 @@ pub fn render_switch_2d_cross_section(spec: &SwitchInspectionSnapshot) -> Div {
                 .w(px(chamber_w + 36.0))
                 .h(px(16.0))
                 .rounded_xs()
-                .bg(rgb(0x10273b))
+                .bg(rgb(0x151B26))
                 .border_1()
-                .border_color(rgb(theme::BORDER_REGAL))
+                .border_color(rgb(hc.deck_border))
                 .flex()
                 .items_center()
                 .justify_center()
                 .text_size(px(9.0))
                 .text_color(rgb(act_col))
                 .child(format!(
-                    "PCB HALL IC · FLUX {:.0}% · {}",
+                    "HALL IC · {:.0}% · {}",
                     spec.flux_pct,
                     if spec.triggered { "TRIGGERED" } else { "READY" }
                 )),
-        );
-
-    stage
+        )
 }
 
 fn apply_key_selection(state: &mut ConnectedState, key_index: u8, ev: &ClickEvent) {
@@ -1433,6 +936,7 @@ fn hotkey_key_appearance(
     fn_held: bool,
     aqua_keys: &std::collections::BTreeSet<u8>,
     aqua_pulsing: &std::collections::BTreeSet<u8>,
+    hc: &HardwareColors,
 ) -> HotkeyKeyVisual {
     let show_fw = matches!(filter, KeymapLayerView::Both | KeymapLayerView::FirmwareOnly);
     let show_dm = matches!(filter, KeymapLayerView::Both | KeymapLayerView::DaemonOnly);
@@ -1475,132 +979,108 @@ fn hotkey_key_appearance(
         Some((
             "TRG",
             if state.draft_category == KeymapCategory::FirmwareFnFlash {
-                theme::FW_AMBER_INK
+                hc.fw_ink
             } else {
-                theme::DM_AQUA_INK
+                hc.dm_ink
             },
         ))
     } else if is_draft_mod {
-        Some(("MOD", theme::INK_ACCENT))
+        Some(("MOD", hc.dm_mod_ink))
     } else {
         None
     };
 
     let (bg, base_border, sub_label, sub_color, bottom_bar) = if is_aqua_pulse {
         let bar = if fw_hid.is_some() {
-            (theme::FW_AMBER_BORDER, Some(theme::DM_AQUA_PULSE_BORDER), 1.0)
+            (hc.fw_border, Some(hc.dm_pulse_border), 1.0)
         } else {
-            (theme::DM_AQUA_PULSE_BORDER, None, 1.0)
+            (hc.dm_pulse_border, None, 1.0)
         };
         (
-            theme::DM_AQUA_PULSE,
-            theme::DM_AQUA_PULSE_BORDER,
-            if fw_hid.is_some() {
-                "FW+LIVE".into()
-            } else {
-                "DM:LIVE".into()
-            },
-            theme::DM_AQUA_PULSE_INK,
+            hc.dm_pulse,
+            hc.dm_pulse_border,
+            if fw_hid.is_some() { "FW+LIVE".into() } else { "DM:LIVE".into() },
+            hc.dm_pulse_ink,
             Some(bar),
         )
     } else if is_aqua {
         let bar = if fw_hid.is_some() {
-            (theme::FW_AMBER_BORDER, Some(theme::DM_AQUA_BORDER), 1.0)
+            (hc.fw_border, Some(hc.dm_border), 1.0)
         } else {
-            (theme::DM_AQUA_BORDER, None, 1.0)
+            (hc.dm_border, None, 1.0)
         };
         (
-            theme::DM_AQUA_ACTIVE,
-            theme::DM_AQUA_BORDER,
-            if fw_hid.is_some() {
-                "FW+ACTV".into()
-            } else {
-                "DM:ACTV".into()
-            },
-            theme::DM_AQUA_INK,
+            hc.dm_active,
+            hc.dm_border,
+            if fw_hid.is_some() { "FW+ACTV".into() } else { "DM:ACTV".into() },
+            hc.dm_ink,
             Some(bar),
         )
     } else if fw_hid.is_some() && dm_active.is_some() {
         (
-            theme::OVERLAP_BG,
-            theme::OVERLAP_BORDER,
+            hc.overlap_bg,
+            hc.overlap_border,
             "FW+DM".into(),
-            theme::OVERLAP_INK,
-            Some((theme::FW_AMBER_BORDER, Some(theme::DM_AQUA_BORDER), 1.0)),
+            hc.overlap_ink,
+            Some((hc.fw_border, Some(hc.dm_border), 1.0)),
         )
     } else if let Some(hid) = fw_hid {
         (
-            if is_fw_glow {
-                theme::FW_AMBER_GLOW
-            } else {
-                theme::FW_AMBER_BG
-            },
-            theme::FW_AMBER_BORDER,
+            if is_fw_glow { hc.fw_glow } else { hc.fw_bg },
+            hc.fw_border,
             short_kb_fn_badge(hid),
-            theme::FW_AMBER_INK,
-            Some((theme::FW_AMBER_BORDER, None, 1.0)),
+            hc.fw_ink,
+            Some((hc.fw_border, None, 1.0)),
         )
     } else if let Some(rule) = dm_active {
         let paused = !state.shortcut_watcher_active;
         (
-            theme::DM_AQUA_BG,
-            if paused {
-                theme::DM_AQUA_DIM_BORDER
-            } else {
-                theme::DM_AQUA_BORDER
-            },
+            hc.dm_bg,
+            if paused { hc.dm_dim_border } else { hc.dm_border },
             short_daemon_rule_badge(rule),
-            if paused {
-                0x67E8F9
-            } else {
-                theme::DM_AQUA_INK
-            },
+            hc.dm_ink,
             Some((
-                if paused {
-                    theme::DM_AQUA_DIM_BORDER
-                } else {
-                    theme::DM_AQUA_BORDER
-                },
+                if paused { hc.dm_dim_border } else { hc.dm_border },
                 None,
                 1.0,
             )),
         )
     } else if dm_muted.is_some() {
         (
-            0x0F2030,
-            0x1E4E5F,
+            hc.dm_muted_bg,
+            hc.dm_muted_border,
             "DM:Off".into(),
-            0x6794A7,
-            Some((0x1E4E5F, None, 1.0)),
+            hc.dm_muted_ink,
+            Some((hc.dm_muted_border, None, 1.0)),
         )
     } else if is_dm_mod {
         (
-            0x0A253B,
-            0x0284C7,
+            hc.dm_mod_bg,
+            hc.dm_mod_border,
             "DM:Mod".into(),
-            0x7DD3FC,
-            Some((0x0284C7, None, 1.0)),
+            hc.dm_mod_ink,
+            Some((hc.dm_mod_border, None, 1.0)),
         )
     } else {
         (
             if is_draft_target || is_draft_mod {
-                theme::SHADE_REGAL
+                hc.key_selected_bg
             } else {
-                theme::SHADE_BASE
+                hc.key_bg
             },
             if is_draft_mod {
-                theme::BORDER_REGAL
+                hc.key_border_selected
             } else {
-                theme::BORDER_SUBTLE
+                hc.key_border
             },
             format!("#{}", key_index),
-            theme::INK_MUTED,
+            hc.key_sub_ink,
             None,
         )
     };
 
     let border = if is_draft_target && !is_aqua && !is_aqua_pulse {
-        theme::BORDER_FOCUS
+        hc.key_border_focus
     } else {
         base_border
     };
@@ -1675,6 +1155,16 @@ fn short_kb_fn_badge(hid: u8) -> String {
             format!("FW:{compact}")
         }
     }
+}
+
+fn linear_to_srgb_u8(c: f32) -> u8 {
+    let clamped = c.clamp(0.0, 1.0);
+    let srgb = if clamped <= 0.0031308 {
+        clamped * 12.92
+    } else {
+        1.055 * clamped.powf(1.0 / 2.4) - 0.055
+    };
+    (srgb * 255.0).round().clamp(0.0, 255.0) as u8
 }
 
 #[cfg(test)]

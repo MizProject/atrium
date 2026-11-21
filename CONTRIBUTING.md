@@ -9,7 +9,7 @@ Thank you for helping improve `reaula`! This workspace implements userspace driv
 | `crates/reaula-core` | library | Indexed keyboard catalog (`src/keyboards/`), wire protocol codecs, `hidapi` transport & sysfs enumeration, ALSA (`libasound`) audio capture, 14-band FFT/beat synthesizer & visualizer (`audio_fx`), 4-layer diagnostics, and `SO_PEERCRED` Unix socket IPC. |
 | `crates/reaula-daemon` | `reaulad` | Single-owner HID hardware daemon (`/run/reaula/reaulad.sock`), indexed driver dispatcher (`src/keyboards/`), in-memory Hall-effect shortcut/Fn watcher (`evdev` + `uinput`), and background audio equalizer with privilege-dropped `--capture-pcm` helper. |
 | `crates/reaula-cli` | `reaula` | Command-line client connecting via `reaulad` or direct HID (`--direct`), plus `doctor` diagnostics and `audio` subcommands. |
-| `crates/reaula-tui` | `reaula-tui` | `ratatui` terminal dashboard for live key travel, actuation/switch profiles, firmware lighting, daemon Audio EQ controls, and SOCD/security status. |
+| `crates/reaula-tui` | `reaula-tui` | *(Experimental / incomplete, still has bugs)* `ratatui` terminal dashboard prototype for live key travel, actuation/switch profiles, firmware lighting, daemon Audio EQ controls, and SOCD/security status. |
 | `crates/reaula-gui` | `reaula-gui` | GPUI desktop app with `wgpu` 3D keyboard & switch-cutaway visualizations and 2D fallbacks. |
 
 ## Development Setup & Verification

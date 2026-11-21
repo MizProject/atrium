@@ -2,21 +2,23 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
-use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 #[cfg(target_os = "linux")]
 use reaula_core::alsa;
 use reaula_core::audio_fx::{AudioEffectStyle, AudioFrameMetrics, AudioPalette};
-use reaula_core::diagnostics::{self, CheckStatus, DiagnosticCheck, DiagnosticLayer, DiagnosticReport};
+use reaula_core::diagnostics::{
+    self, CheckStatus, DiagnosticCheck, DiagnosticLayer, DiagnosticReport,
+};
 use reaula_core::driver::DeviceProbe;
 use reaula_core::ipc::{
     AudioSyncConfig, AudioSyncSource, AudioSyncStatus, DaemonClient, DaemonStatus, FnOverride,
-    IpcError, PeerCredentials, ShortcutAction, ShortcutRule, ShortcutTriggerLog,
-    ShortcutsSnapshot, VirtualKey,
+    IpcError, PeerCredentials, ShortcutAction, ShortcutRule, ShortcutTriggerLog, ShortcutsSnapshot,
+    VirtualKey,
 };
 use reaula_core::keymap;
 use reaula_core::protocol::{
@@ -33,7 +35,6 @@ pub const MAX_FEEDBACK_EVENTS: usize = 24;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum NavSection {
     Main,
-    Guide,
     Calibration,
     ColorLight,
     Hotkeys,
@@ -41,9 +42,8 @@ pub enum NavSection {
 }
 
 impl NavSection {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 5] = [
         Self::Main,
-        Self::Guide,
         Self::Calibration,
         Self::ColorLight,
         Self::Hotkeys,
@@ -53,7 +53,6 @@ impl NavSection {
     pub fn label(self) -> &'static str {
         match self {
             Self::Main => "Main",
-            Self::Guide => "Guide",
             Self::Calibration => "Calibration",
             Self::ColorLight => "Color & Light",
             Self::Hotkeys => "Keymaps",
@@ -61,25 +60,13 @@ impl NavSection {
         }
     }
 
-    pub fn icon(self) -> crate::icons::MaterialIcon {
+    pub fn icon(self) -> gpui_kit::assets::IconName {
         match self {
-            Self::Main => crate::icons::MaterialIcon::Keyboard,
-            Self::Guide => crate::icons::MaterialIcon::MenuBook,
-            Self::Calibration => crate::icons::MaterialIcon::Tune,
-            Self::ColorLight => crate::icons::MaterialIcon::Palette,
-            Self::Hotkeys => crate::icons::MaterialIcon::Bolt,
-            Self::Diagnostics => crate::icons::MaterialIcon::MonitorHeart,
-        }
-    }
-
-    pub fn subtitle(self) -> &'static str {
-        match self {
-            Self::Main => "Status, Actuation, Switches & SOCD",
-            Self::Guide => "WIN 60 HE Reference & Keymaps",
-            Self::Calibration => "Guarded Sensor Calibration",
-            Self::ColorLight => "3D Model, 2D Mockup & Custom RGB",
-            Self::Hotkeys => "Firmware Flash vs. Daemon Layers",
-            Self::Diagnostics => "4-Layer Fault Isolation & Test",
+            Self::Main => gpui_kit::assets::IconName::Keyboard,
+            Self::Calibration => gpui_kit::assets::IconName::SlidersHorizontal,
+            Self::ColorLight => gpui_kit::assets::IconName::Palette,
+            Self::Hotkeys => gpui_kit::assets::IconName::Zap,
+            Self::Diagnostics => gpui_kit::assets::IconName::Activity,
         }
     }
 }
@@ -155,26 +142,6 @@ pub struct SwitchInspectionSnapshot {
     pub flux_pct: f64,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum DropdownId {
-    LightEffect,
-    LightDirection,
-    LightFgPreset,
-    LightBgPreset,
-    CustomBrushPreset,
-    AudioSource,
-    AudioEffect,
-    AudioPalette,
-    AudioFgPreset,
-    AudioBgPreset,
-    HotkeyArrowKb,
-    HotkeyArrowDaemon,
-    HotkeyModifier,
-    HotkeyTrigger,
-    HotkeyAction,
-    HotkeyVirtualKey,
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ArrowClusterPreset {
     Rdfg,
@@ -222,6 +189,7 @@ pub enum KeymapCategory {
     DaemonMemory,
 }
 
+#[cfg(test)]
 impl KeymapCategory {
     pub fn label(self) -> &'static str {
         match self {
@@ -237,16 +205,6 @@ pub enum KeymapLayerView {
     Both,
     FirmwareOnly,
     DaemonOnly,
-}
-
-impl KeymapLayerView {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Both => "Compare Both",
-            Self::FirmwareOnly => "Firmware Only [FW]",
-            Self::DaemonOnly => "Daemon Only [DM]",
-        }
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -314,7 +272,7 @@ impl AudioSourceOption {
             Self::Monitor => "Desktop Audio Monitor (ALSA)".into(),
             Self::DefaultMic => "Default Mic / Line-In (ALSA)".into(),
             Self::Demo => "120 BPM Built-In Demo Synth".into(),
-            Self::AlsaDevice { pcm, label } => format!("{pcm} — {label}"),
+            Self::AlsaDevice { pcm, label } => format!("{pcm} - {label}"),
         }
     }
 
@@ -829,7 +787,7 @@ impl ConnectedState {
             cal_active: false,
             cal_any_key: false,
             cal_calibrated: BTreeSet::new(),
-            cal_status_text: "Ready (idle — keys untouched)".into(),
+            cal_status_text: "Ready (idle, keys untouched)".into(),
             cal_thread: None,
             shortcut_rules,
             shortcut_watcher_active,
@@ -922,7 +880,13 @@ impl ConnectedState {
             .unwrap_or("AULA WIN 60 HE")
     }
 
-    pub fn record_feedback(&mut self, label: impl Into<String>, rtt_ms: f64, ok: bool, detail: String) {
+    pub fn record_feedback(
+        &mut self,
+        label: impl Into<String>,
+        rtt_ms: f64,
+        ok: bool,
+        detail: String,
+    ) {
         self.feedback_seq += 1;
         self.feedback_log.push_front(ResponseEvent {
             id: self.feedback_seq,
@@ -978,7 +942,8 @@ impl ConnectedState {
             return Err("Stop calibration before streaming live key travel.".into());
         }
         self.travel_thread = None;
-        let sub_client = DaemonClient::connect(self.socket_arg.as_deref()).map_err(|e| e.to_string())?;
+        let sub_client =
+            DaemonClient::connect(self.socket_arg.as_deref()).map_err(|e| e.to_string())?;
         let mut sub = sub_client
             .subscribe_travel(keymap::all_indices())
             .map_err(|e| e.to_string())?;
@@ -1050,14 +1015,17 @@ impl ConnectedState {
             }
             self.last_sample = Some((sample.index, mm));
 
-            let entry = self.switch_tests.entry(sample.index).or_insert(SwitchTestStats {
-                current_mm: mm,
-                peak_mm: mm,
-                released_zero: mm <= 0.02,
-                presses: 0,
-                was_pressed: false,
-                last_seen: now,
-            });
+            let entry = self
+                .switch_tests
+                .entry(sample.index)
+                .or_insert(SwitchTestStats {
+                    current_mm: mm,
+                    peak_mm: mm,
+                    released_zero: mm <= 0.02,
+                    presses: 0,
+                    was_pressed: false,
+                    last_seen: now,
+                });
             let newly_pressed = !entry.was_pressed && mm >= 0.30;
             entry.current_mm = mm;
             entry.last_seen = now;
@@ -1084,8 +1052,7 @@ impl ConnectedState {
                     self.mascots
                         .record_code(MascotKeySource::Hardware, kdef.code, now);
                 } else {
-                    self.mascots
-                        .record_code(MascotKeySource::Hardware, "", now);
+                    self.mascots.record_code(MascotKeySource::Hardware, "", now);
                 }
             } else if entry.was_pressed && mm <= 0.02 {
                 entry.was_pressed = false;
@@ -1270,7 +1237,7 @@ impl ConnectedState {
         if self.draft_category == KeymapCategory::DaemonMemory && index == keymap::idx::FN {
             if mm >= 0.85 {
                 self.captured_gesture_banner = Some(
-                    "Fn (#122) is reserved for Hardware Firmware [FW] Flash — hold Caps, Ctrl, Alt, or Menu for Daemon chords."
+                    "Fn (#122) is reserved for Hardware Firmware [FW] Flash: hold Caps, Ctrl, Alt, or Menu for Daemon chords."
                         .into(),
                 );
             }
@@ -1287,15 +1254,18 @@ impl ConnectedState {
                 }
                 Some(first) if first != index => {
                     if first == keymap::idx::FN || index == keymap::idx::FN {
-                        let trig = if first == keymap::idx::FN { index } else { first };
+                        let trig = if first == keymap::idx::FN {
+                            index
+                        } else {
+                            first
+                        };
                         self.draft_category = KeymapCategory::FirmwareFnFlash;
                         self.draft_rule_key = trig;
                         self.shortcut_recording = false;
                         self.record_first_key = None;
                         let t_name = keymap::by_index(trig).map_or("Key", |k| k.name);
-                        self.captured_gesture_banner = Some(format!(
-                            "Memorized Firmware chord gesture: Fn + {t_name}!"
-                        ));
+                        self.captured_gesture_banner =
+                            Some(format!("Memorized Firmware chord gesture: Fn + {t_name}!"));
                     } else {
                         self.draft_rule_modifier = Some(first);
                         self.draft_rule_key = index;
@@ -1303,9 +1273,8 @@ impl ConnectedState {
                         self.record_first_key = None;
                         let m_name = keymap::by_index(first).map_or("Mod", |k| k.name);
                         let t_name = keymap::by_index(index).map_or("Key", |k| k.name);
-                        self.captured_gesture_banner = Some(format!(
-                            "Memorized chord gesture: {m_name} + {t_name}!"
-                        ));
+                        self.captured_gesture_banner =
+                            Some(format!("Memorized chord gesture: {m_name} + {t_name}!"));
                     }
                 }
                 Some(_) => {}
@@ -1315,7 +1284,7 @@ impl ConnectedState {
                 self.shortcut_recording = false;
                 self.record_first_key = None;
                 self.captured_gesture_banner = Some(
-                    "Fn cannot be used alone — select a trigger key for Fn + Key in Firmware Flash."
+                    "Fn cannot be used alone: select a trigger key for Fn + Key in Firmware Flash."
                         .into(),
                 );
                 return;
@@ -1349,7 +1318,8 @@ impl ConnectedState {
         self.cal_calibrated.clear();
         self.cal_any_key = any_key;
 
-        let sub_client = DaemonClient::connect(self.socket_arg.as_deref()).map_err(|e| e.to_string())?;
+        let sub_client =
+            DaemonClient::connect(self.socket_arg.as_deref()).map_err(|e| e.to_string())?;
         let mut sub = sub_client
             .start_calibration(any_key)
             .map_err(|e| e.to_string())?;
@@ -1380,15 +1350,19 @@ impl ConnectedState {
         self.cal_thread = Some(CalibThread { stop, rx });
         self.cal_active = true;
         self.cal_status_text = if any_key {
-            "Any-Key calibration armed — press key(s) firmly to full bottom-out, then click Finish.".into()
+            "Any-Key calibration armed: press key(s) to full bottom-out, then click Finish.".into()
         } else {
-            "All-Key calibration armed — press EVERY key smoothly to bottom-out until 61/61.".into()
+            "All-Key calibration armed: press every key smoothly to bottom-out until 61/61.".into()
         };
         self.record_feedback(
             "Start Calibration",
             0.0,
             true,
-            if any_key { "Any-key armed".into() } else { "All-key armed".into() },
+            if any_key {
+                "Any-key armed".into()
+            } else {
+                "All-key armed".into()
+            },
         );
         Ok(())
     }
@@ -1446,7 +1420,12 @@ impl ConnectedState {
         if finished {
             self.cal_thread = None;
             self.cal_active = false;
-            self.record_feedback("Calibration Result", 0.0, true, self.cal_status_text.clone());
+            self.record_feedback(
+                "Calibration Result",
+                0.0,
+                true,
+                self.cal_status_text.clone(),
+            );
         }
         changed
     }
@@ -1459,7 +1438,12 @@ impl ConnectedState {
         let rtt = t0.elapsed().as_secs_f64() * 1000.0;
         let summary = rep.attribution.summary.clone();
         self.diag_report = Some(rep.clone());
-        self.record_feedback("4-Layer Diagnostics", rtt, rep.attribution.primary_fault.is_none(), summary);
+        self.record_feedback(
+            "4-Layer Diagnostics",
+            rtt,
+            rep.attribution.primary_fault.is_none(),
+            summary,
+        );
         Ok(rep)
     }
 
@@ -1596,7 +1580,12 @@ impl ConnectedState {
                 ShortcutAction::ActuationPreset {
                     name: "FPS RT WASD".into(),
                     mode: TriggerMode::RapidTrigger,
-                    indices: vec![keymap::idx::W, keymap::idx::A, keymap::idx::S, keymap::idx::D],
+                    indices: vec![
+                        keymap::idx::W,
+                        keymap::idx::A,
+                        keymap::idx::S,
+                        keymap::idx::D,
+                    ],
                     depth_mm: 0.30,
                     rt_press_mm: 0.15,
                     rt_release_mm: 0.15,
@@ -1632,7 +1621,9 @@ impl ConnectedState {
                 },
                 "Wave Cyan RGB",
             ),
-            ShortcutActionPreset::PollRate8k => (ShortcutAction::SetPollRate { khz: 8 }, "8 kHz Poll"),
+            ShortcutActionPreset::PollRate8k => {
+                (ShortcutAction::SetPollRate { khz: 8 }, "8 kHz Poll")
+            }
             ShortcutActionPreset::RunCommand => (
                 ShortcutAction::RunCommand {
                     command: self.draft_rule_command.trim().to_string(),
@@ -1679,7 +1670,7 @@ impl ConnectedState {
             || self.draft_rule_key == keymap::idx::FN
         {
             return Err(
-                "Fn (#122) is reserved for Hardware Firmware [FW] Flash — choose another key or modifier for Daemon rules."
+                "Fn (#122) is reserved for Hardware Firmware [FW] Flash: choose another key or modifier for Daemon rules."
                     .into(),
             );
         }
@@ -1708,9 +1699,7 @@ impl ConnectedState {
         }
 
         if let Some(edit_id) = self.editing_daemon_rule_id {
-            if allow_replace_conflict
-                && let Some(cid) = conflict_id
-            {
+            if allow_replace_conflict && let Some(cid) = conflict_id {
                 self.shortcut_rules.retain(|r| r.id != cid);
             }
             if self.shortcut_rules.iter().any(|r| r.id == edit_id) {
@@ -1728,9 +1717,7 @@ impl ConnectedState {
             self.editing_daemon_rule_id = None;
         }
 
-        if allow_replace_conflict
-            && let Some(cid) = conflict_id
-        {
+        if allow_replace_conflict && let Some(cid) = conflict_id {
             let updated = self.build_shortcut_rule_with_id(cid);
             if let Some(slot) = self.shortcut_rules.iter_mut().find(|r| r.id == cid) {
                 *slot = updated;
@@ -1787,13 +1774,16 @@ impl ConnectedState {
         let mod_idx = self.daemon_arrow_modifier();
         let mod_name = keymap::by_index(mod_idx).map_or("Caps", |k| k.name);
         for (trig, vk, _) in arrow_cluster_bindings(preset) {
-            let label = format!("{mod_name}+{trig_name} -> {vk_name}",
+            let label = format!(
+                "{mod_name}+{trig_name} -> {vk_name}",
                 trig_name = keymap::by_index(trig).map_or("Key", |k| k.name),
                 vk_name = vk.label()
             );
-            if let Some(existing) = self.shortcut_rules.iter_mut().find(|r| {
-                r.modifier_key == Some(mod_idx) && r.trigger_key == trig
-            }) {
+            if let Some(existing) = self
+                .shortcut_rules
+                .iter_mut()
+                .find(|r| r.modifier_key == Some(mod_idx) && r.trigger_key == trig)
+            {
                 existing.enabled = true;
                 existing.name = label;
                 existing.trigger_depth_mm = self.draft_rule_depth_mm;
@@ -1821,10 +1811,7 @@ impl ConnectedState {
     }
 
     fn apply_fn_overrides_list(&mut self, list: Vec<FnOverride>) {
-        self.keyboard_fn_map = list
-            .into_iter()
-            .map(|o| (o.index, o.target_hid))
-            .collect();
+        self.keyboard_fn_map = list.into_iter().map(|o| (o.index, o.target_hid)).collect();
     }
 
     pub fn refresh_keyboard_fn_map(&mut self) -> Result<(), String> {
@@ -1837,7 +1824,9 @@ impl ConnectedState {
 
     pub fn save_draft_to_keyboard_fn(&mut self) -> Result<String, String> {
         if self.draft_rule_key == keymap::idx::FN {
-            return Err("Pick a non-Fn Trigger Key to assign under Fn + Key in Firmware Flash.".into());
+            return Err(
+                "Pick a non-Fn Trigger Key to assign under Fn + Key in Firmware Flash.".into(),
+            );
         }
         let Some(target_hid) = keymap::virtual_key_to_hid_usage(self.draft_virtual_key) else {
             return Err(format!(
@@ -2164,7 +2153,9 @@ impl ConnectedState {
     pub fn start_audio_sync(&mut self) -> Result<(), String> {
         if !self.audio_disclaimer_accepted {
             self.open_audio_disclaimer(true);
-            return Err("Accept the experimental hardware disclaimer before starting Audio Sync.".into());
+            return Err(
+                "Accept the experimental hardware disclaimer before starting Audio Sync.".into(),
+            );
         }
         if self.cal_active {
             return Err("Stop sensor calibration before starting Audio Sync.".into());
@@ -2322,24 +2313,6 @@ pub fn offline_diagnostic_report(reason: &str) -> DiagnosticReport {
     }
 }
 
-pub fn format_cap_pills(probe: &DeviceProbe) -> Vec<(&'static str, bool)> {
-    let Some(c) = probe.init_info.as_ref() else {
-        return Vec::new();
-    };
-    vec![
-        ("PRCS/SOCD", c.is_prcs),
-        ("Custom RGB", c.is_custom_light),
-        ("Switch Profiles", c.is_more_switch),
-        ("Poll Rate", c.is_poll_rate),
-        ("Deadband", c.is_dead_band),
-        ("Music Rhythm", c.is_music_rhythm),
-        ("Any-Key Cal", c.is_any_key_calibration),
-        ("HighPrecision", c.is_high_precision),
-        ("Gamepad", c.is_gamepad),
-        ("RS", c.is_rs),
-    ]
-}
-
 pub fn format_rgb_hex(rgb: [u8; 3]) -> String {
     format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2])
 }
@@ -2367,9 +2340,14 @@ pub fn rgb_to_hsv(rgb: [u8; 3]) -> [f32; 3] {
         ((r - g) / delta + 4.0) / 6.0
     };
     let sat = if max_c <= 1e-5 { 0.0 } else { delta / max_c };
-    [hue.rem_euclid(1.0), sat.clamp(0.0, 1.0), max_c.clamp(0.0, 1.0)]
+    [
+        hue.rem_euclid(1.0),
+        sat.clamp(0.0, 1.0),
+        max_c.clamp(0.0, 1.0),
+    ]
 }
 
+#[cfg(test)]
 /// Convert HSV `(hue in 0..1, sat in 0..1, val in 0..1)` back to sRGB `[0..255]`.
 pub fn hsv_to_rgb_u8(hue: f32, sat: f32, val: f32) -> [u8; 3] {
     let h = hue.rem_euclid(1.0) * 6.0;
@@ -2426,6 +2404,7 @@ pub fn describe_rgb_human(rgb: [u8; 3]) -> &'static str {
     }
 }
 
+#[cfg(test)]
 /// Parse hex (`#RRGGBB`, `RRGGBB`, `#RGB`) or `R,G,B` text cleanly (e.g. from Paste Hex).
 pub fn parse_hex_or_rgb(raw: &str) -> Option<[u8; 3]> {
     let trimmed = raw.trim();
@@ -2446,7 +2425,10 @@ pub fn parse_hex_or_rgb(raw: &str) -> Option<[u8; 3]> {
             return Some([d(&hex[0..1])?, d(&hex[1..2])?, d(&hex[2..3])?]);
         }
     }
-    let parts: Vec<&str> = trimmed.split([',', ' ']).filter(|s| !s.is_empty()).collect();
+    let parts: Vec<&str> = trimmed
+        .split([',', ' '])
+        .filter(|s| !s.is_empty())
+        .collect();
     if parts.len() == 3 {
         return Some([
             parts[0].parse().ok()?,
@@ -2455,17 +2437,6 @@ pub fn parse_hex_or_rgb(raw: &str) -> Option<[u8; 3]> {
         ]);
     }
     None
-}
-
-pub fn protocol_light_summary(ls: &LightState) -> String {
-    format!(
-        "{} | bri {}/4 | spd {}/4 | {} | {}",
-        protocol::light_mode_name(ls.mode),
-        ls.brightness,
-        ls.speed,
-        format_rgb_hex(ls.fg),
-        if ls.power_on { "ON" } else { "OFF" }
-    )
 }
 
 pub(crate) fn is_recoverable_ipc_error(err: &IpcError) -> bool {
@@ -2537,11 +2508,7 @@ mod tests {
         let t2 = t1 + Duration::from_secs(1);
         assert!(!egg.record_code(MascotKeySource::Hardware, "Digit3", t2));
         // Duplicate OS window echo within 90ms is ignored cleanly.
-        assert!(!egg.record_code(
-            MascotKeySource::Window,
-            "3",
-            t2 + Duration::from_millis(5)
-        ));
+        assert!(!egg.record_code(MascotKeySource::Window, "3", t2 + Duration::from_millis(5)));
         assert!(egg.record_code(
             MascotKeySource::Hardware,
             "Digit9",
@@ -2641,8 +2608,14 @@ mod tests {
                 .find(|r| Some(r.id) != editing_id && r.modifier_key == m && r.trigger_key == k)
                 .map(|r| r.id)
         };
-        assert_eq!(conflict(None, Some(keymap::idx::L_ALT), keymap::idx::W), Some(4));
-        assert_eq!(conflict(Some(4), Some(keymap::idx::L_ALT), keymap::idx::W), None);
+        assert_eq!(
+            conflict(None, Some(keymap::idx::L_ALT), keymap::idx::W),
+            Some(4)
+        );
+        assert_eq!(
+            conflict(Some(4), Some(keymap::idx::L_ALT), keymap::idx::W),
+            None
+        );
 
         // Editing rule #4 replaces it in place instead of appending a stale rule #5.
         if let Some(slot) = rules.iter_mut().find(|r| r.id == 4) {
@@ -2654,4 +2627,3 @@ mod tests {
         assert_eq!(rules[0].id, 4);
     }
 }
-

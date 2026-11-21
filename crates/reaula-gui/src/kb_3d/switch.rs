@@ -9,7 +9,7 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
-use gpui::RenderImage;
+use gpui_kit::RenderImage;
 
 use super::{
     OffscreenTarget, Vertex, create_init_buffer, create_vertex_pipeline, create_wgpu_device,
@@ -225,6 +225,7 @@ impl SwitchRenderer3D {
                 label: Some("sw3d-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &self.target.color_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -246,6 +247,7 @@ impl SwitchRenderer3D {
                 }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.bind_group, &[]);
@@ -729,7 +731,7 @@ pub fn build_switch_mesh() -> (Vec<Vertex>, Vec<u32>) {
         [KIND_MAGNET_NORTH, 0.0, 0.0, 0.3],
     );
 
-    // 9. Sculpted Cutaway Keycap Shell (`y = 0.90 .. 1.46`) — sleeves cleanly outside top housing collar!
+    // 9. Sculpted cutaway keycap shell (`y = 0.90 .. 1.46`) sleeves outside top housing collar.
     let cap_wall = linear_hex(0x16243a);
     let cap_top = linear_hex(0x22385a);
     // Back skirt

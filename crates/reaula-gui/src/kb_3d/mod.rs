@@ -21,7 +21,7 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
-use gpui::RenderImage;
+use gpui_kit::RenderImage;
 use image::{Frame, RgbaImage};
 use smallvec::SmallVec;
 
@@ -260,12 +260,18 @@ impl OffscreenTarget {
         slice.map_async(wgpu::MapMode::Read, move |res| {
             let _ = tx.send(res);
         });
-        let _ = device.poll(wgpu::PollType::Wait);
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
         rx.recv()
             .map_err(|_| "GPU readback channel dropped".to_string())?
             .map_err(|e| format!("GPU buffer map failed: {e}"))?;
 
-        let raw = slice.get_mapped_range().to_vec();
+        let raw = slice
+            .get_mapped_range()
+            .map_err(|e| format!("GPU mapped readback failed: {e}"))?
+            .to_vec();
         self.readback_buf.unmap();
 
         let rgba = RgbaImage::from_raw(self.width, self.height, raw)
@@ -279,14 +285,15 @@ impl OffscreenTarget {
 pub(crate) fn create_wgpu_device(
     label: &str,
 ) -> Result<(Arc<wgpu::Device>, Arc<wgpu::Queue>), String> {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
-        ..Default::default()
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         compatible_surface: None,
         force_fallback_adapter: false,
+        apply_limit_buckets: false,
     }))
     .map_err(|e| format!("no GPU adapter for 3D preview: {e}"))?;
 
@@ -305,7 +312,7 @@ pub(crate) fn create_vertex_pipeline(
     wgsl: &str,
     bind_layout: &wgpu::BindGroupLayout,
 ) -> Result<wgpu::RenderPipeline, String> {
-    device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(&format!("{label}-shader")),
         source: wgpu::ShaderSource::Wgsl(wgsl.into()),
@@ -313,8 +320,8 @@ pub(crate) fn create_vertex_pipeline(
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some(&format!("{label}-pipeline-layout")),
-        bind_group_layouts: &[bind_layout],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(bind_layout)],
+        immediate_size: 0,
     });
 
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -324,7 +331,7 @@ pub(crate) fn create_vertex_pipeline(
             module: &shader,
             entry_point: Some("vs_main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
-            buffers: &[wgpu::VertexBufferLayout {
+            buffers: &[Some(wgpu::VertexBufferLayout {
                 array_stride: size_of::<Vertex>() as u64,
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &wgpu::vertex_attr_array![
@@ -333,7 +340,7 @@ pub(crate) fn create_vertex_pipeline(
                     2 => Float32x3,
                     3 => Float32x4
                 ],
-            }],
+            })],
         },
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
@@ -342,8 +349,8 @@ pub(crate) fn create_vertex_pipeline(
         },
         depth_stencil: Some(wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::Less,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Less),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
@@ -358,10 +365,10 @@ pub(crate) fn create_vertex_pipeline(
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     });
-    if let Some(err) = pollster::block_on(device.pop_error_scope()) {
+    if let Some(err) = pollster::block_on(error_scope.pop()) {
         return Err(format!("wgpu shader/pipeline validation error: {err}"));
     }
     Ok(pipeline)
@@ -503,6 +510,7 @@ impl KeyboardRenderer3D {
                 label: Some("kb3d-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &self.target.color_view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -524,6 +532,7 @@ impl KeyboardRenderer3D {
                 }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.bind_group, &[]);
@@ -572,6 +581,7 @@ pub(crate) fn create_init_buffer(
     });
     buf.slice(0..data.len() as u64)
         .get_mapped_range_mut()
+        .expect("newly created mapped buffer range should be valid")
         .copy_from_slice(data);
     buf.unmap();
     buf
