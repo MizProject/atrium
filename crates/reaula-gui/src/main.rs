@@ -1625,7 +1625,9 @@ impl ReaulaGui {
                 .gap_2()
                 .child(
                     v_flex()
+                        .flex_1()
                         .min_w_0()
+                        .overflow_hidden()
                         .child(
                             h_flex()
                                 .items_center()
@@ -1793,6 +1795,7 @@ impl Render for ReaulaGui {
 
         let top_header = h_flex()
             .w_full()
+            .min_w_0()
             .px_4()
             .py_2()
             .bg(cx.theme().sidebar)
@@ -1803,17 +1806,23 @@ impl Render for ReaulaGui {
             .gap_3()
             .child(
                 h_flex()
+                    .min_w_0()
                     .items_center()
                     .gap_2()
                     .child(Icon::new(self.nav.icon()))
-                    .child(div().text_sm().child(self.nav.label())),
+                    .child(div().min_w_0().truncate().text_sm().child(self.nav.label())),
             )
             .child(
                 h_flex()
+                    .min_w_0()
+                    .flex_shrink_0()
                     .items_center()
                     .gap_2()
                     .child(
                         h_flex()
+                            .max_w(px(320.0))
+                            .min_w_0()
+                            .overflow_hidden()
                             .px_2()
                             .py_1()
                             .rounded(cx.theme().radius)
@@ -1826,6 +1835,7 @@ impl Render for ReaulaGui {
                                 div()
                                     .w(px(6.0))
                                     .h(px(6.0))
+                                    .flex_shrink_0()
                                     .rounded(cx.theme().radius_full())
                                     .bg(if conn_ok {
                                         cx.theme().success
@@ -1835,6 +1845,9 @@ impl Render for ReaulaGui {
                             )
                             .child(
                                 div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
                                     .text_xs()
                                     .text_color(cx.theme().muted_foreground)
                                     .child(hw_badge),

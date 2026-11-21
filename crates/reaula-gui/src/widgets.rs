@@ -1,10 +1,12 @@
 //! Domain hardware widgets: 61-key WIN 60 HE board canvas, 2D switch cutaway schematic,
 //! keymap badges, and Select option items.
 
-use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::component::select::SelectItem;
 use gpui_kit::{
-    ClickEvent, Context, Div, MouseButton, SharedString, div, prelude::*, px, rgb,
+    AnyElement, App, ClickEvent, Context, Div, IntoElement as _, MouseButton, SharedString, div,
+    prelude::*, px, rgb,
 };
 
 use reaula_core::ipc::{ShortcutAction, ShortcutRule, VirtualKey};
@@ -69,6 +71,73 @@ impl<T: Clone + PartialEq + 'static> SelectItem for SelectOption<T> {
     }
 }
 
+pub struct MetricCell {
+    pub label: SharedString,
+    pub value: AnyElement,
+}
+
+impl MetricCell {
+    pub fn text(label: impl Into<SharedString>, value: impl Into<SharedString>, cx: &App) -> Self {
+        let fg = cx.theme().foreground;
+        Self {
+            label: label.into(),
+            value: div()
+                .w_full()
+                .min_w_0()
+                .truncate()
+                .text_xs()
+                .text_color(fg)
+                .child(value.into())
+                .into_any_element(),
+        }
+    }
+
+    pub fn element(label: impl Into<SharedString>, value: AnyElement) -> Self {
+        Self {
+            label: label.into(),
+            value,
+        }
+    }
+}
+
+/// Responsive key-value metric grid that wraps cleanly across breakpoints and
+/// keeps labels and values within cell boundaries without mid-word wrapping.
+pub fn render_metric_table(cells: Vec<MetricCell>, min_col_px: f32, cx: &App) -> Div {
+    let border = cx.theme().border;
+    let bg = cx.theme().background;
+    let muted = cx.theme().muted_foreground;
+    let radius = cx.theme().radius;
+
+    h_flex()
+        .w_full()
+        .min_w_0()
+        .flex_wrap()
+        .gap_2()
+        .children(cells.into_iter().map(|cell| {
+            v_flex()
+                .flex_1()
+                .min_w(px(min_col_px))
+                .overflow_hidden()
+                .px_2p5()
+                .py_1p5()
+                .gap_0p5()
+                .rounded(radius)
+                .border_1()
+                .border_color(border)
+                .bg(bg)
+                .child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(11.0))
+                        .text_color(muted)
+                        .child(cell.label),
+                )
+                .child(div().w_full().min_w_0().overflow_hidden().child(cell.value))
+        }))
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum KeyboardCanvasMode {
     ActuationAndTravel,
@@ -129,7 +198,7 @@ impl ReaulaGui {
         scale: f32,
         time_s: f32,
         cx: &mut Context<Self>,
-    ) -> Div {
+    ) -> AnyElement {
         let hc = HardwareColors::from_app(cx);
         let board_w = KEYBOARD_CANVAS_WIDTH as f32 * scale + 28.0;
         let board_h = KEYBOARD_CANVAS_HEIGHT as f32 * scale + 28.0;
@@ -529,13 +598,20 @@ impl ReaulaGui {
         }
 
         div()
+            .id(("kb-scroll", mode as usize))
             .w_full()
-            .flex_shrink_0()
-            .flex()
-            .justify_center()
-            .py_1()
-            .pl_2()
-            .child(canvas)
+            .min_w_0()
+            .overflow_x_scrollbar()
+            .child(
+                div()
+                    .min_w_full()
+                    .flex()
+                    .justify_center()
+                    .py_1()
+                    .pl_2()
+                    .child(canvas),
+            )
+            .into_any_element()
     }
 
     fn on_canvas_key_click(
@@ -656,7 +732,7 @@ pub fn render_switch_2d_cross_section(spec: &SwitchInspectionSnapshot, hc: &Hard
         hc.dm_border
     };
 
-    let chamber_left = 86.0_f32;
+    let chamber_left = 74.0_f32;
     let chamber_w = 148.0_f32;
     let magnet_rest_bot = 152.0_f32;
     let magnet_bot_y = magnet_rest_bot + travel_px;
@@ -670,7 +746,8 @@ pub fn render_switch_2d_cross_section(spec: &SwitchInspectionSnapshot, hc: &Hard
 
     let mut stage = div()
         .relative()
-        .w(px(330.0))
+        .w(px(304.0))
+        .max_w_full()
         .h(px(288.0))
         .rounded_lg()
         .bg(rgb(hc.deck_bg))

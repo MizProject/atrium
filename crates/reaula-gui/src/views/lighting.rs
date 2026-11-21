@@ -5,15 +5,14 @@ use gpui_kit::base::Selectable as _;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::color_picker::ColorPicker;
-use gpui_kit::component::description_list::DescriptionList;
 use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants as _};
 use gpui_kit::component::select::Select;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    Context, Div, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement as _, ScrollDelta,
-    ScrollEvent, Styled as _, div, img, prelude::*, px, rgb,
+    Context, Div, MouseButton, MouseDownEvent, MouseMoveEvent, ObjectFit, ParentElement as _,
+    ScrollDelta, ScrollEvent, Styled as _, div, img, prelude::*, px, rgb,
 };
 
 use reaula_core::audio_fx::{AudioPalette, NUM_BANDS};
@@ -27,7 +26,9 @@ use crate::state::{
     pack_rgb_u32,
 };
 use crate::theme::HardwareColors;
-use crate::widgets::{COLOR_SWATCHES, KeyboardCanvasMode};
+use crate::widgets::{
+    COLOR_SWATCHES, KeyboardCanvasMode, MetricCell, render_metric_table,
+};
 
 impl ReaulaGui {
     pub(crate) fn view_color_light(&self, state: &ConnectedState, cx: &mut Context<Self>) -> Div {
@@ -181,13 +182,15 @@ impl ReaulaGui {
             LightViewMode::ThreeD => match (&self.renderer_3d, &self.preview_3d_img) {
                 (Ok(_), Some(frame)) => v_flex()
                     .w_full()
+                    .min_w_0()
                     .items_center()
                     .gap_1p5()
                     .child(
                         div()
                             .id("kb-3d-viewport")
-                            .w(px(KB3D_WIDTH as f32 * 0.84))
-                            .h(px(KB3D_HEIGHT as f32 * 0.84))
+                            .w_full()
+                            .max_w(px((KB3D_WIDTH as f32 * 0.78).min(648.0)))
+                            .h(px((KB3D_HEIGHT as f32 * 0.78).min(365.0)))
                             .rounded(cx.theme().radius_lg)
                             .overflow_hidden()
                             .border_1()
@@ -244,10 +247,17 @@ impl ReaulaGui {
                                 cx.stop_propagation();
                                 cx.notify();
                             }))
-                            .child(img(frame.clone()).w_full().h_full()),
+                            .child(
+                                img(frame.clone())
+                                    .w_full()
+                                    .h_full()
+                                    .object_fit(ObjectFit::Contain),
+                            ),
                     )
                     .child(
                         div()
+                            .w_full()
+                            .min_w_0()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .child(format!(
@@ -258,12 +268,13 @@ impl ReaulaGui {
                     .into_any_element(),
                 _ => v_flex()
                     .w_full()
+                    .min_w_0()
                     .items_center()
                     .gap_2()
                     .child(self.render_keyboard_canvas(
                         state,
                         KeyboardCanvasMode::ColorMockup,
-                        1.06,
+                        1.0,
                         time_s,
                         cx,
                     ))
@@ -271,12 +282,13 @@ impl ReaulaGui {
             },
             LightViewMode::TwoD => v_flex()
                 .w_full()
+                .min_w_0()
                 .items_center()
                 .gap_1p5()
                 .child(self.render_keyboard_canvas(
                     state,
                     KeyboardCanvasMode::ColorMockup,
-                    1.08,
+                    1.0,
                     time_s,
                     cx,
                 ))
@@ -304,49 +316,61 @@ impl ReaulaGui {
             }
         };
 
-        let telemetry_bar = DescriptionList::horizontal()
-            .columns(4)
-            .bordered(true)
-            .small()
-            .item("Layer", active_layer_label, 1)
-            .item("Brightness", format!("{} / {}", ls.brightness, LIGHT_MAX_LEVEL), 1)
-            .item("Speed", format!("{} / {}", ls.speed, LIGHT_MAX_LEVEL), 1)
-            .item(
-                "Color / Power",
-                format!(
-                    "{} · {}",
-                    if ls.full_color {
-                        "Rainbow".into()
-                    } else {
-                        format_rgb_hex(ls.fg)
-                    },
-                    if ls.power_on { "ON" } else { "OFF" }
+        let color_power = format!(
+            "{} · {}",
+            if ls.full_color {
+                "Rainbow".into()
+            } else {
+                format_rgb_hex(ls.fg)
+            },
+            if ls.power_on { "ON" } else { "OFF" }
+        );
+
+        let telemetry_bar = render_metric_table(
+            vec![
+                MetricCell::text("Layer", active_layer_label, cx),
+                MetricCell::text(
+                    "Brightness",
+                    format!("{} / {}", ls.brightness, LIGHT_MAX_LEVEL),
+                    cx,
                 ),
-                1,
-            );
+                MetricCell::text("Speed", format!("{} / {}", ls.speed, LIGHT_MAX_LEVEL), cx),
+                MetricCell::text("Color / Power", color_power, cx),
+            ],
+            125.0,
+            cx,
+        );
 
         let stage_column = v_flex()
             .flex_1()
-            .min_w(px(540.0))
+            .min_w(px(450.0))
+            .overflow_hidden()
             .gap_3()
             .child(
                 GroupBox::new()
                     .outline()
+                    .overflow_hidden()
                     .child(toolbar)
                     .child(stage_body)
                     .child(telemetry_bar),
             );
 
-        let inspector_column = div().w(px(370.0)).flex_shrink_0().child(match state.light_tab {
-            LightEditorTab::FirmwareEffects => self.render_firmware_light_editor(state, cx),
-            LightEditorTab::CustomSlot1 => self.render_custom_slot_editor(state, 0, cx),
-            LightEditorTab::CustomSlot2 => self.render_custom_slot_editor(state, 1, cx),
-            LightEditorTab::AudioSync => self.render_audio_sync_editor(state, cx),
-        });
+        let inspector_column = div()
+            .w(px(360.0))
+            .max_w_full()
+            .flex_shrink_0()
+            .overflow_hidden()
+            .child(match state.light_tab {
+                LightEditorTab::FirmwareEffects => self.render_firmware_light_editor(state, cx),
+                LightEditorTab::CustomSlot1 => self.render_custom_slot_editor(state, 0, cx),
+                LightEditorTab::CustomSlot2 => self.render_custom_slot_editor(state, 1, cx),
+                LightEditorTab::AudioSync => self.render_audio_sync_editor(state, cx),
+            });
 
-        div().w_full().child(
+        div().w_full().min_w_0().child(
             h_flex()
                 .w_full()
+                .min_w_0()
                 .flex_wrap()
                 .items_start()
                 .gap_3()
@@ -608,6 +632,9 @@ impl ReaulaGui {
             .map_or("-90.0 dBFS".into(), |m| format!("{:.1} dBFS", m.rms_dbfs.max(-90.0)));
 
         let spectrum = v_flex()
+            .w_full()
+            .min_w_0()
+            .overflow_hidden()
             .p_2p5()
             .gap_2()
             .rounded(cx.theme().radius)
@@ -616,11 +643,22 @@ impl ReaulaGui {
             .bg(cx.theme().background)
             .child(
                 h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .items_center()
                     .justify_between()
+                    .gap_2()
                     .text_xs()
-                    .child(state.audio_status_text.clone())
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(state.audio_status_text.clone()),
+                    )
                     .child(
                         h_flex()
+                            .flex_shrink_0()
                             .gap_2()
                             .child(
                                 div()
@@ -665,6 +703,7 @@ impl ReaulaGui {
 
         let mut card = GroupBox::new()
             .outline()
+            .overflow_hidden()
             .title("Audio-Reactive RGB (Experimental)")
             .child(
                 Alert::warning(
@@ -679,16 +718,21 @@ impl ReaulaGui {
             .child(spectrum)
             .child(
                 v_flex()
+                    .w_full()
+                    .min_w_0()
                     .gap_1p5()
                     .child(div().text_xs().child("Audio Capture Source"))
                     .child(Select::new(&self.sel_audio_source).small()),
             )
             .child(
                 h_flex()
+                    .w_full()
+                    .min_w_0()
                     .gap_2()
                     .child(
                         v_flex()
                             .flex_1()
+                            .min_w_0()
                             .gap_1()
                             .child(div().text_xs().child("Effect"))
                             .child(Select::new(&self.sel_audio_effect).small()),
@@ -696,6 +740,7 @@ impl ReaulaGui {
                     .child(
                         v_flex()
                             .flex_1()
+                            .min_w_0()
                             .gap_1()
                             .child(div().text_xs().child("Palette"))
                             .child(Select::new(&self.sel_audio_palette).small()),
@@ -815,6 +860,9 @@ impl ReaulaGui {
             .collect::<Vec<_>>();
 
         v_flex()
+            .w_full()
+            .min_w_0()
+            .overflow_hidden()
             .gap_1p5()
             .p_2()
             .rounded(cx.theme().radius)
@@ -822,14 +870,21 @@ impl ReaulaGui {
             .border_color(cx.theme().border)
             .child(
                 h_flex()
+                    .w_full()
+                    .min_w_0()
                     .justify_between()
                     .items_center()
                     .gap_2()
                     .child(
                         v_flex()
-                            .child(div().text_xs().child(label))
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().w_full().min_w_0().truncate().text_xs().child(label))
                             .child(
                                 div()
+                                    .w_full()
+                                    .min_w_0()
+                                    .truncate()
                                     .text_xs()
                                     .text_color(cx.theme().muted_foreground)
                                     .child(format!("{human} · {hex}")),

@@ -156,6 +156,7 @@ fn render_actuation_section() -> gpui_kit::AnyElement {
                 .child(
                     DescriptionList::horizontal()
                         .columns(1)
+                        .label_width(px(180.))
                         .bordered(true)
                         .item(
                             "Actuation Point",
@@ -185,11 +186,13 @@ fn render_actuation_section() -> gpui_kit::AnyElement {
                 .title("Calibration Protocol")
                 .child(
                     v_flex()
+                        .w_full()
+                        .min_w_0()
                         .gap_1p5()
                         .text_xs()
-                        .child("1. Re-calibrate after swapping switches or if rest travel is above 0.00 mm.")
-                        .child("2. Leave all keys untouched before arming All-Key or Any-Key sampling.")
-                        .child("3. Switching tabs or closing the app automatically disarms calibration."),
+                        .child(div().w_full().min_w_0().whitespace_normal().child("1. Re-calibrate after swapping switches or if rest travel is above 0.00 mm."))
+                        .child(div().w_full().min_w_0().whitespace_normal().child("2. Leave all keys untouched before arming All-Key or Any-Key sampling."))
+                        .child(div().w_full().min_w_0().whitespace_normal().child("3. Switching tabs or closing the app automatically disarms calibration.")),
                 ),
         )
         .into_any_element()
@@ -205,6 +208,7 @@ fn render_keymap_section() -> gpui_kit::AnyElement {
                 .child(
                     DescriptionList::horizontal()
                         .columns(1)
+                        .label_width(px(180.))
                         .bordered(true)
                         .item(
                             "[FW] Flash (Amber)",
@@ -235,11 +239,13 @@ fn render_audio_section() -> gpui_kit::AnyElement {
                 .title("Daemon-Hosted Audio Sync")
                 .child(
                     v_flex()
+                        .w_full()
+                        .min_w_0()
                         .gap_1p5()
                         .text_xs()
-                        .child("reaulad runs a privilege-dropped --capture-pcm worker feeding 14-band FFT + beat metrics to cmd 0x09.")
-                        .child("Audio Sync keeps running in the background after closing the GUI until explicitly stopped.")
-                        .child("Continuous per-key streaming is experimental and may accelerate LED wear on some units."),
+                        .child(div().w_full().min_w_0().whitespace_normal().child("reaulad runs a privilege-dropped --capture-pcm worker feeding 14-band FFT + beat metrics to cmd 0x09."))
+                        .child(div().w_full().min_w_0().whitespace_normal().child("Audio Sync keeps running in the background after closing the GUI until explicitly stopped."))
+                        .child(div().w_full().min_w_0().whitespace_normal().child("Continuous per-key streaming is experimental and may accelerate LED wear on some units.")),
                 ),
         )
         .into_any_element()
@@ -247,13 +253,13 @@ fn render_audio_section() -> gpui_kit::AnyElement {
 
 fn render_shortcuts_section() -> gpui_kit::AnyElement {
     let key_row = |keys: &'static str, desc: &'static str| {
-        let mut row = h_flex().items_center().justify_between().gap_3();
+        let mut row = h_flex().w_full().min_w_0().items_center().justify_between().gap_3();
         if let Ok(ks) = Keystroke::parse(keys) {
             row = row.child(Kbd::new(ks));
         } else {
-            row = row.child(div().text_xs().child(keys));
+            row = row.child(div().flex_shrink_0().text_xs().child(keys));
         }
-        row.child(div().flex_1().text_xs().child(desc))
+        row.child(div().flex_1().min_w_0().whitespace_normal().text_xs().child(desc))
     };
 
     v_flex()
@@ -278,6 +284,7 @@ fn render_shortcuts_section() -> gpui_kit::AnyElement {
                 .child(
                     DescriptionList::horizontal()
                         .columns(1)
+                        .label_width(px(180.))
                         .bordered(true)
                         .item("Fn + \\|", "Cycle onboard firmware lighting modes", 1)
                         .item("Fn + Up / Down", "Adjust hardware LED brightness", 1)
@@ -298,6 +305,7 @@ fn render_daemon_section() -> gpui_kit::AnyElement {
                 .child(
                     DescriptionList::horizontal()
                         .columns(1)
+                        .label_width(px(180.))
                         .bordered(true)
                         .item("Standalone", "reaula daemon start | status | stop", 1)
                         .item("Systemd", "reaula daemon systemd install --enable --start", 1)

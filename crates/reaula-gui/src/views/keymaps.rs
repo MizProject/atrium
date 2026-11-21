@@ -36,6 +36,8 @@ impl ReaulaGui {
     ) -> Div {
         v_flex()
             .w_full()
+            .min_w_0()
+            .overflow_hidden()
             .gap_3()
             .child(self.render_hotkey_board_card(state, cx))
             .child(self.render_hotkey_composer(state, cx))
@@ -614,6 +616,9 @@ impl ReaulaGui {
                 let dst = keymap::usb_hid_name(target_hid);
                 fw_col = fw_col.child(
                     h_flex()
+                        .w_full()
+                        .min_w_0()
+                        .overflow_hidden()
                         .p_2()
                         .rounded(cx.theme().radius)
                         .bg(rgb(hc.fw_bg))
@@ -624,13 +629,23 @@ impl ReaulaGui {
                         .gap_2()
                         .child(
                             h_flex()
+                                .flex_1()
+                                .min_w_0()
                                 .items_center()
                                 .gap_2()
                                 .child(hardware_tag("FW", true, false, &hc))
-                                .child(div().text_xs().child(format!("Fn + {src} -> {dst}"))),
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_xs()
+                                        .child(format!("Fn + {src} -> {dst}")),
+                                ),
                         )
                         .child(
                             h_flex()
+                                .flex_shrink_0()
                                 .gap_1()
                                 .child(
                                     Button::new(("hk-kb-edit", usize::from(slot_idx)))
@@ -701,6 +716,9 @@ impl ReaulaGui {
 
                 dm_col = dm_col.child(
                     v_flex()
+                        .w_full()
+                        .min_w_0()
+                        .overflow_hidden()
                         .p_2()
                         .gap_1p5()
                         .rounded(cx.theme().radius)
@@ -719,11 +737,16 @@ impl ReaulaGui {
                         }))
                         .child(
                             h_flex()
+                                .w_full()
+                                .min_w_0()
                                 .justify_between()
                                 .items_center()
                                 .gap_2()
                                 .child(
                                     h_flex()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .flex_wrap()
                                         .items_center()
                                         .gap_1p5()
                                         .child(hardware_tag("DM", false, rule.enabled, &hc))
@@ -736,34 +759,44 @@ impl ReaulaGui {
                                         .when(invalid_fn, |r| {
                                             r.child(hardware_tag("Invalid Fn", true, false, &hc))
                                         })
-                                        .child(div().text_xs().child(format!(
-                                            "#{} {} (>= {:.2} mm)",
-                                            rule.id,
-                                            rule.gesture_label(),
-                                            rule.trigger_depth_mm
-                                        ))),
+                                        .child(
+                                            div()
+                                                .min_w_0()
+                                                .truncate()
+                                                .text_xs()
+                                                .child(format!(
+                                                    "#{} {} (>= {:.2} mm)",
+                                                    rule.id,
+                                                    rule.gesture_label(),
+                                                    rule.trigger_depth_mm
+                                                )),
+                                        ),
                                 )
                                 .child(
-                                    Switch::new(("hk-en-sw", r_id as usize))
-                                        .small()
-                                        .checked(rule.enabled)
-                                        .on_change(cx.listener(move |this, en: &bool, _, cx| {
-                                            if let Ok(st) = &mut this.conn {
-                                                if let Some(r) = st
-                                                    .shortcut_rules
-                                                    .iter_mut()
-                                                    .find(|r| r.id == r_id)
-                                                {
-                                                    r.enabled = *en;
+                                    div().flex_shrink_0().child(
+                                        Switch::new(("hk-en-sw", r_id as usize))
+                                            .small()
+                                            .checked(rule.enabled)
+                                            .on_change(cx.listener(move |this, en: &bool, _, cx| {
+                                                if let Ok(st) = &mut this.conn {
+                                                    if let Some(r) = st
+                                                        .shortcut_rules
+                                                        .iter_mut()
+                                                        .find(|r| r.id == r_id)
+                                                    {
+                                                        r.enabled = *en;
+                                                    }
+                                                    let _ = st.sync_shortcuts();
                                                 }
-                                                let _ = st.sync_shortcuts();
-                                            }
-                                            cx.notify();
-                                        })),
+                                                cx.notify();
+                                            })),
+                                    ),
                                 ),
                         )
                         .child(
                             h_flex()
+                                .w_full()
+                                .min_w_0()
                                 .justify_between()
                                 .items_center()
                                 .gap_2()
@@ -778,6 +811,7 @@ impl ReaulaGui {
                                 )
                                 .child(
                                     h_flex()
+                                        .flex_shrink_0()
                                         .gap_1()
                                         .child(
                                             Button::new(("hk-edit-btn", r_id as usize))
@@ -839,16 +873,30 @@ impl ReaulaGui {
 
         h_flex()
             .w_full()
+            .min_w_0()
             .flex_wrap()
             .items_stretch()
             .gap_3()
-            .child(div().flex_1().min_w(px(340.0)).child(fw_col))
-            .child(div().flex_1().min_w(px(340.0)).child(dm_col))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(310.0))
+                    .overflow_hidden()
+                    .child(fw_col.overflow_hidden()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(310.0))
+                    .overflow_hidden()
+                    .child(dm_col.overflow_hidden()),
+            )
     }
 
     fn render_hotkey_logs(&self, state: &ConnectedState, cx: &mut Context<Self>) -> Div {
         let mut card = GroupBox::new()
             .outline()
+            .overflow_hidden()
             .title("[DM] Execution Feed");
 
         if state.shortcut_logs.is_empty() {
@@ -862,6 +910,9 @@ impl ReaulaGui {
             for log in state.shortcut_logs.iter().take(6) {
                 card = card.child(
                     div()
+                        .w_full()
+                        .min_w_0()
+                        .whitespace_normal()
                         .text_xs()
                         .text_color(if log.success {
                             cx.theme().success
@@ -877,6 +928,6 @@ impl ReaulaGui {
                 );
             }
         }
-        div().w_full().child(card)
+        div().w_full().min_w_0().child(card)
     }
 }

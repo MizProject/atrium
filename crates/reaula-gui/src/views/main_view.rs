@@ -2,7 +2,6 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::description_list::DescriptionList;
 use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants as _};
 use gpui_kit::component::slider::Slider;
 use gpui_kit::component::switch::Switch;
@@ -15,7 +14,9 @@ use reaula_core::protocol::TriggerMode;
 
 use crate::ReaulaGui;
 use crate::state::{ConnectedState, NavSection};
-use crate::widgets::{KB_SCALE_DEFAULT, KeyboardCanvasMode, SWITCH_OPTIONS};
+use crate::widgets::{
+    KB_SCALE_DEFAULT, KeyboardCanvasMode, MetricCell, SWITCH_OPTIONS, render_metric_table,
+};
 
 impl ReaulaGui {
     pub(crate) fn view_main(&self, state: &ConnectedState, cx: &mut Context<Self>) -> Div {
@@ -31,45 +32,50 @@ impl ReaulaGui {
         );
         let focus_name = keymap::by_index(state.focused_key).map_or("Key", |k| k.name);
 
-        let identity_strip = DescriptionList::horizontal()
-            .columns(4)
-            .bordered(true)
-            .small()
-            .item("Device", state.model_label(), 1)
-            .item("Firmware", short_fw_segment(fw).to_string(), 1)
-            .item("Travel", range, 1)
-            .item("Link / Poll", poll, 1)
-            .item(
-                "SOCD",
-                if state.socd_enabled {
-                    format!("Active ({} pair)", state.socd_pairs.len())
-                } else {
-                    "Off".into()
-                },
-                1,
-            )
-            .item("FW Slots", format!("{}", state.keyboard_fn_map.len()), 1)
-            .item(
-                "Daemon Rules",
-                format!(
-                    "{} ({})",
-                    state.shortcut_rules.len(),
-                    if state.shortcut_watcher_active { "On" } else { "Paused" }
+        let identity_strip = render_metric_table(
+            vec![
+                MetricCell::text("Device", state.model_label(), cx),
+                MetricCell::text("Firmware", short_fw_segment(fw).to_string(), cx),
+                MetricCell::text("Travel", range, cx),
+                MetricCell::text("Link / Poll", poll, cx),
+                MetricCell::text(
+                    "SOCD",
+                    if state.socd_enabled {
+                        format!("Active ({} pair)", state.socd_pairs.len())
+                    } else {
+                        "Off".into()
+                    },
+                    cx,
                 ),
-                1,
-            )
-            .item(
-                "Action",
-                Button::new("main-open-diag")
-                    .xsmall()
-                    .outline()
-                    .label("Diagnostics")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.switch_section(NavSection::Diagnostics, cx);
-                    }))
-                    .into_any_element(),
-                1,
-            );
+                MetricCell::text("FW Slots", format!("{}", state.keyboard_fn_map.len()), cx),
+                MetricCell::text(
+                    "Daemon Rules",
+                    format!(
+                        "{} ({})",
+                        state.shortcut_rules.len(),
+                        if state.shortcut_watcher_active {
+                            "On"
+                        } else {
+                            "Paused"
+                        }
+                    ),
+                    cx,
+                ),
+                MetricCell::element(
+                    "Action",
+                    Button::new("main-open-diag")
+                        .xsmall()
+                        .outline()
+                        .label("Diagnostics")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.switch_section(NavSection::Diagnostics, cx);
+                        }))
+                        .into_any_element(),
+                ),
+            ],
+            205.0,
+            cx,
+        );
 
         let board_header = h_flex()
             .w_full()
@@ -154,6 +160,7 @@ impl ReaulaGui {
 
         let matrix_box = GroupBox::new()
             .outline()
+            .overflow_hidden()
             .child(board_header)
             .child(self.render_keyboard_canvas(
                 state,
@@ -165,6 +172,7 @@ impl ReaulaGui {
 
         let control_deck = h_flex()
             .w_full()
+            .min_w_0()
             .flex_wrap()
             .items_stretch()
             .gap_3()
@@ -174,6 +182,8 @@ impl ReaulaGui {
 
         v_flex()
             .w_full()
+            .min_w_0()
+            .overflow_hidden()
             .gap_3()
             .child(identity_strip)
             .child(matrix_box)
@@ -236,8 +246,8 @@ impl ReaulaGui {
             ));
         }
 
-        div().flex_1().min_w(px(280.0)).child(
-            card.child(
+        div().flex_1().min_w(px(260.0)).overflow_hidden().child(
+            card.overflow_hidden().child(
                 Button::new("apply-actuation")
                     .primary()
                     .small()
@@ -296,7 +306,7 @@ impl ReaulaGui {
                     })),
             );
 
-        div().flex_1().min_w(px(280.0)).child(card)
+        div().flex_1().min_w(px(260.0)).overflow_hidden().child(card.overflow_hidden())
     }
 
     fn main_socd_poll_card(&self, state: &ConnectedState, cx: &mut Context<Self>) -> Div {
@@ -407,6 +417,9 @@ impl ReaulaGui {
             )
             .child(
                 div()
+                    .w_full()
+                    .min_w_0()
+                    .truncate()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
                     .child(pairs_label),
@@ -435,7 +448,7 @@ impl ReaulaGui {
                     ),
             );
 
-        div().flex_1().min_w(px(280.0)).child(card)
+        div().flex_1().min_w(px(260.0)).overflow_hidden().child(card.overflow_hidden())
     }
 
     pub(crate) fn slider_metric_row(
@@ -446,13 +459,23 @@ impl ReaulaGui {
         cx: &mut Context<Self>,
     ) -> Div {
         v_flex()
+            .w_full()
+            .min_w_0()
             .gap_1()
             .child(
                 h_flex()
+                    .w_full()
+                    .min_w_0()
                     .justify_between()
+                    .gap_2()
                     .text_xs()
-                    .child(label.to_string())
-                    .child(div().text_color(cx.theme().muted_foreground).child(value_txt)),
+                    .child(div().flex_1().min_w_0().truncate().child(label.to_string()))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(value_txt),
+                    ),
             )
             .child(
                 Slider::new(slider_state)

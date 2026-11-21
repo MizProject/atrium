@@ -4,14 +4,13 @@ use gpui_kit::assets::IconName;
 use gpui_kit::base::Selectable as _;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::description_list::DescriptionList;
 use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants as _};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
-    Context, Div, MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement as _, ScrollDelta,
-    ScrollEvent, Styled as _, div, img, prelude::*, px,
+    Context, Div, MouseButton, MouseDownEvent, MouseMoveEvent, ObjectFit, ParentElement as _,
+    ScrollDelta, ScrollEvent, Styled as _, div, img, prelude::*, px,
 };
 
 use reaula_core::diagnostics::{CheckStatus, DiagnosticLayer, DiagnosticReport};
@@ -21,7 +20,9 @@ use crate::ReaulaGui;
 use crate::kb_3d::{SWITCH_3D_HEIGHT, SWITCH_3D_WIDTH, SwitchCameraPreset};
 use crate::state::{ConnectedState, SwitchViewMode, offline_diagnostic_report};
 use crate::theme::HardwareColors;
-use crate::widgets::{KeyboardCanvasMode, render_switch_2d_cross_section};
+use crate::widgets::{
+    KeyboardCanvasMode, MetricCell, render_metric_table, render_switch_2d_cross_section,
+};
 
 impl ReaulaGui {
     pub(crate) fn view_diagnostics(&self, cx: &mut Context<Self>) -> Div {
@@ -130,6 +131,9 @@ impl ReaulaGui {
                             .latency_ms
                             .map_or_else(String::new, |m| format!(" ({m:.2} ms)"));
                         let mut item = v_flex()
+                            .w_full()
+                            .min_w_0()
+                            .overflow_hidden()
                             .p_2()
                             .gap_0p5()
                             .rounded(cx.theme().radius)
@@ -137,12 +141,18 @@ impl ReaulaGui {
                             .border_color(cx.theme().border)
                             .child(
                                 div()
+                                    .w_full()
+                                    .min_w_0()
+                                    .truncate()
                                     .text_xs()
                                     .text_color(st_col)
                                     .child(format!("[{}] {}{}", c.status.label(), c.name, lat)),
                             )
                             .child(
                                 div()
+                                    .w_full()
+                                    .min_w_0()
+                                    .whitespace_normal()
                                     .text_xs()
                                     .text_color(cx.theme().muted_foreground)
                                     .child(c.detail.clone()),
@@ -150,6 +160,9 @@ impl ReaulaGui {
                         if let Some(rem) = &c.remedy {
                             item = item.child(
                                 div()
+                                    .w_full()
+                                    .min_w_0()
+                                    .whitespace_normal()
                                     .text_xs()
                                     .text_color(cx.theme().warning)
                                     .child(format!("Fix: {rem}")),
@@ -157,7 +170,13 @@ impl ReaulaGui {
                         }
                         layer_box = layer_box.child(item);
                     }
-                    pair_row = pair_row.child(div().flex_1().min_w(px(340.0)).child(layer_box));
+                    pair_row = pair_row.child(
+                        div()
+                            .flex_1()
+                            .min_w(px(300.0))
+                            .overflow_hidden()
+                            .child(layer_box.overflow_hidden()),
+                    );
                 }
                 layers_grid = layers_grid.child(pair_row);
             }
@@ -171,7 +190,13 @@ impl ReaulaGui {
 
         let bench_row = self.render_diagnostics_bottom_row(cx);
 
-        let mut root = v_flex().w_full().gap_3().child(header_box).child(layers_grid);
+        let mut root = v_flex()
+            .w_full()
+            .min_w_0()
+            .overflow_hidden()
+            .gap_3()
+            .child(header_box)
+            .child(layers_grid);
         if let Some(vb) = visual_bench {
             root = root.child(vb);
         }
@@ -206,10 +231,15 @@ impl ReaulaGui {
         let time_s = self.start_instant.elapsed().as_secs_f32();
         let depth_box = GroupBox::new()
             .outline()
+            .overflow_hidden()
             .title("Keycap Depth & 0.00 mm Return Check")
             .child(
                 h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .flex_wrap()
                     .justify_between()
+                    .gap_2()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
                     .child(format!(
@@ -221,7 +251,7 @@ impl ReaulaGui {
             .child(self.render_keyboard_canvas(
                 state,
                 KeyboardCanvasMode::DiagnosticsDepth,
-                1.06,
+                1.0,
                 time_s,
                 cx,
             ));
@@ -327,8 +357,9 @@ impl ReaulaGui {
                 let viewport = match (&self.switch_renderer_3d, &self.preview_switch_3d_img) {
                     (Ok(_), Some(frame)) => div()
                         .id("switch-3d-viewport")
-                        .w(px(SWITCH_3D_WIDTH as f32 * 0.74))
-                        .h(px(SWITCH_3D_HEIGHT as f32 * 0.74))
+                        .w_full()
+                        .max_w(px(SWITCH_3D_WIDTH as f32 * 0.72))
+                        .h(px(SWITCH_3D_HEIGHT as f32 * 0.72))
                         .rounded(cx.theme().radius)
                         .overflow_hidden()
                         .border_1()
@@ -385,12 +416,24 @@ impl ReaulaGui {
                             cx.stop_propagation();
                             cx.notify();
                         }))
-                        .child(img(frame.clone()).w_full().h_full())
+                        .child(
+                            img(frame.clone())
+                                .w_full()
+                                .h_full()
+                                .object_fit(ObjectFit::Contain),
+                        )
                         .into_any_element(),
                     _ => render_switch_2d_cross_section(&snap, &hc).into_any_element(),
                 };
 
-                v_flex().items_center().gap_1p5().child(presets).child(viewport).into_any_element()
+                v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .items_center()
+                    .gap_1p5()
+                    .child(presets)
+                    .child(viewport)
+                    .into_any_element()
             }
             SwitchViewMode::TwoD => v_flex()
                 .items_center()
@@ -398,56 +441,58 @@ impl ReaulaGui {
                 .into_any_element(),
         };
 
-        let metrics = DescriptionList::horizontal()
-            .columns(3)
-            .bordered(true)
-            .small()
-            .item("Depth", format!("{:.2}/{:.2} mm", snap.travel_mm, snap.max_mm), 1)
-            .item(
-                "Flux / State",
-                format!(
-                    "{:.0}% · {}",
-                    snap.flux_pct,
-                    if snap.triggered { "TRIG" } else { "READY" }
-                ),
-                1,
+        let actuation_str = if snap.rapid_trigger {
+            format!(
+                "{:.2} mm (RT {:.2}/{:.2})",
+                snap.actuation_mm, snap.rt_press_mm, snap.rt_release_mm
             )
-            .item("Peak", format!("{:.2} mm", snap.peak_mm), 1)
-            .item(
-                "Actuation",
-                if snap.rapid_trigger {
+        } else {
+            format!("{:.2} mm Fixed", snap.actuation_mm)
+        };
+        let presses_str = format!(
+            "{} · {}",
+            snap.presses,
+            if snap.sweeping {
+                "SWEEP"
+            } else if snap.released_zero {
+                "0.00 OK"
+            } else {
+                "IDLE"
+            }
+        );
+
+        let metrics = render_metric_table(
+            vec![
+                MetricCell::text(
+                    "Depth",
+                    format!("{:.2}/{:.2} mm", snap.travel_mm, snap.max_mm),
+                    cx,
+                ),
+                MetricCell::text(
+                    "Flux / State",
                     format!(
-                        "{:.2} mm (RT {:.2}/{:.2})",
-                        snap.actuation_mm, snap.rt_press_mm, snap.rt_release_mm
-                    )
-                } else {
-                    format!("{:.2} mm Fixed", snap.actuation_mm)
-                },
-                1,
-            )
-            .item(
-                "Deadband",
-                format!("{:.2}/{:.2} mm", snap.db_top_mm, snap.db_bottom_mm),
-                1,
-            )
-            .item(
-                "Presses",
-                format!(
-                    "{} · {}",
-                    snap.presses,
-                    if snap.sweeping {
-                        "SWEEP"
-                    } else if snap.released_zero {
-                        "0.00 OK"
-                    } else {
-                        "IDLE"
-                    }
+                        "{:.0}% · {}",
+                        snap.flux_pct,
+                        if snap.triggered { "TRIG" } else { "READY" }
+                    ),
+                    cx,
                 ),
-                1,
-            );
+                MetricCell::text("Peak", format!("{:.2} mm", snap.peak_mm), cx),
+                MetricCell::text("Actuation", actuation_str, cx),
+                MetricCell::text(
+                    "Deadband",
+                    format!("{:.2}/{:.2} mm", snap.db_top_mm, snap.db_bottom_mm),
+                    cx,
+                ),
+                MetricCell::text("Presses", presses_str, cx),
+            ],
+            135.0,
+            cx,
+        );
 
         let switch_box = GroupBox::new()
             .outline()
+            .overflow_hidden()
             .title("Switch Mechanism Cutaway")
             .child(sw_controls)
             .child(stage)
@@ -455,11 +500,12 @@ impl ReaulaGui {
 
         h_flex()
             .w_full()
+            .min_w_0()
             .flex_wrap()
             .items_stretch()
             .gap_3()
-            .child(div().flex_1().min_w(px(540.0)).child(depth_box))
-            .child(div().w(px(380.0)).flex_shrink_0().child(switch_box))
+            .child(div().flex_1().min_w(px(450.0)).overflow_hidden().child(depth_box))
+            .child(div().w(px(360.0)).max_w_full().flex_shrink_0().overflow_hidden().child(switch_box))
     }
 
     fn render_diagnostics_bottom_row(&self, cx: &mut Context<Self>) -> Div {
@@ -494,8 +540,11 @@ impl ReaulaGui {
                     switch_card = switch_card.child(
                         h_flex()
                             .id(("dx-sw-row", usize::from(idx)))
+                            .w_full()
+                            .min_w_0()
                             .px_2()
                             .py_1()
+                            .gap_2()
                             .rounded(cx.theme().radius)
                             .border_1()
                             .border_color(if st.focused_key == idx {
@@ -512,11 +561,24 @@ impl ReaulaGui {
                                 }
                                 cx.notify();
                             }))
-                            .child(div().text_xs().child(format!(
-                                "{kname} (#{idx}): now {:.2} · peak {:.2} · x{}",
-                                stat.current_mm, stat.peak_mm, stat.presses
-                            )))
-                            .child(div().text_xs().text_color(col).child(status_txt)),
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_xs()
+                                    .child(format!(
+                                        "{kname} (#{idx}): now {:.2} · peak {:.2} · x{}",
+                                        stat.current_mm, stat.peak_mm, stat.presses
+                                    )),
+                            )
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .text_xs()
+                                    .text_color(col)
+                                    .child(status_txt),
+                            ),
                     );
                 }
             }
@@ -524,6 +586,9 @@ impl ReaulaGui {
             for ev in st.feedback_log.iter().take(10) {
                 feedback_card = feedback_card.child(
                     div()
+                        .w_full()
+                        .min_w_0()
+                        .whitespace_normal()
                         .text_xs()
                         .text_color(if ev.ok {
                             cx.theme().foreground
@@ -544,12 +609,18 @@ impl ReaulaGui {
             let offline_note = offline_diagnostic_report("Daemon offline");
             switch_card = switch_card.child(
                 div()
+                    .w_full()
+                    .min_w_0()
+                    .whitespace_normal()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
                     .child(offline_note.attribution.summary),
             );
             feedback_card = feedback_card.child(
                 div()
+                    .w_full()
+                    .min_w_0()
+                    .whitespace_normal()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
                     .child("Connect to reaulad to inspect live RPC RTT."),
@@ -558,10 +629,23 @@ impl ReaulaGui {
 
         h_flex()
             .w_full()
+            .min_w_0()
             .flex_wrap()
             .items_stretch()
             .gap_3()
-            .child(div().flex_1().min_w(px(340.0)).child(switch_card))
-            .child(div().flex_1().min_w(px(340.0)).child(feedback_card))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(300.0))
+                    .overflow_hidden()
+                    .child(switch_card.overflow_hidden()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(300.0))
+                    .overflow_hidden()
+                    .child(feedback_card.overflow_hidden()),
+            )
     }
 }
