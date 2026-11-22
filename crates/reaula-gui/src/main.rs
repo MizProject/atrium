@@ -2201,6 +2201,7 @@ impl Render for ReaulaGui {
         }
 
         let t = self.text();
+        let is_setup_mode = self.nav == NavSection::Setup;
         let is_dark = cx.theme().is_dark();
         let active_unsup = self
             .config
@@ -2248,7 +2249,13 @@ impl Render for ReaulaGui {
                     .items_center()
                     .gap_2()
                     .child(Icon::new(self.nav.icon()))
-                    .child(div().min_w_0().truncate().text_sm().child(t.nav_label(self.nav))),
+                    .child(div().min_w_0().truncate().text_sm().child(
+                        if is_setup_mode {
+                            gpui_kit::SharedString::from(format!("ReAULA · {}", t.nav_setup))
+                        } else {
+                            gpui_kit::SharedString::from(t.nav_label(self.nav))
+                        },
+                    )),
             )
             .child(
                 h_flex()
@@ -2256,41 +2263,43 @@ impl Render for ReaulaGui {
                     .flex_shrink_0()
                     .items_center()
                     .gap_2()
-                    .child(
-                        h_flex()
-                            .max_w(px(320.0))
-                            .min_w_0()
-                            .overflow_hidden()
-                            .px_2()
-                            .py_1()
-                            .rounded(cx.theme().radius)
-                            .border_1()
-                            .border_color(cx.theme().border)
-                            .bg(cx.theme().background)
-                            .items_center()
-                            .gap_1p5()
-                            .child(
-                                div()
-                                    .w(px(6.0))
-                                    .h(px(6.0))
-                                    .flex_shrink_0()
-                                    .rounded(cx.theme().radius_full())
-                                    .bg(if conn_ok {
-                                        cx.theme().success
-                                    } else {
-                                        cx.theme().danger
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(hw_badge),
-                            ),
-                    )
+                    .when(!is_setup_mode, |el| {
+                        el.child(
+                            h_flex()
+                                .max_w(px(320.0))
+                                .min_w_0()
+                                .overflow_hidden()
+                                .px_2()
+                                .py_1()
+                                .rounded(cx.theme().radius)
+                                .border_1()
+                                .border_color(cx.theme().border)
+                                .bg(cx.theme().background)
+                                .items_center()
+                                .gap_1p5()
+                                .child(
+                                    div()
+                                        .w(px(6.0))
+                                        .h(px(6.0))
+                                        .flex_shrink_0()
+                                        .rounded(cx.theme().radius_full())
+                                        .bg(if conn_ok {
+                                            cx.theme().success
+                                        } else {
+                                            cx.theme().danger
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(hw_badge),
+                                ),
+                        )
+                    })
                     .child(
                         Button::new("top-theme-btn")
                             .xsmall()
@@ -2319,25 +2328,29 @@ impl Render for ReaulaGui {
                     ),
             );
 
-        let footer_right = match &self.conn {
-            Ok(s) => {
-                let travel_txt = s.last_sample.map_or_else(
-                    || "Travel idle".into(),
-                    |(idx, mm)| {
-                        let k = keymap::by_index(idx).map_or("?", |k| k.name);
-                        format!("{k}: {mm:.2} mm")
-                    },
-                );
-                let rtt_txt = s.feedback_log.front().map_or_else(String::new, |ev| {
-                    format!(
-                        " · {} ({:.2} ms)",
-                        if ev.ok { "OK" } else { "ERR" },
-                        ev.rtt_ms
-                    )
-                });
-                format!("{travel_txt}{rtt_txt}")
+        let footer_right = if is_setup_mode {
+            format!("Step {} / 5", self.setup.step.min(4) + 1)
+        } else {
+            match &self.conn {
+                Ok(s) => {
+                    let travel_txt = s.last_sample.map_or_else(
+                        || "Travel idle".into(),
+                        |(idx, mm)| {
+                            let k = keymap::by_index(idx).map_or("?", |k| k.name);
+                            format!("{k}: {mm:.2} mm")
+                        },
+                    );
+                    let rtt_txt = s.feedback_log.front().map_or_else(String::new, |ev| {
+                        format!(
+                            " · {} ({:.2} ms)",
+                            if ev.ok { "OK" } else { "ERR" },
+                            ev.rtt_ms
+                        )
+                    });
+                    format!("{travel_txt}{rtt_txt}")
+                }
+                Err(_) => t.daemon_offline.into(),
             }
-            Err(_) => "Offline".into(),
         };
 
         let footer = h_flex()
@@ -2357,7 +2370,11 @@ impl Render for ReaulaGui {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .child(self.status_line.clone()),
+                    .child(if is_setup_mode {
+                        String::new()
+                    } else {
+                        self.status_line.clone()
+                    }),
             )
             .child(div().flex_shrink_0().child(footer_right));
 
@@ -2403,7 +2420,7 @@ impl Render for ReaulaGui {
                     cx.notify();
                 }
             }))
-            .child(self.render_sidebar(cx))
+            .when(!is_setup_mode, |el| el.child(self.render_sidebar(cx)))
             .child(
                 v_flex()
                     .flex_1()

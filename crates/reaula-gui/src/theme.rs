@@ -219,6 +219,15 @@ impl HardwareColors {
     }
 }
 
+/// Mini surface preview palette `(canvas_bg, card_bg, border_col, fg_col)` for Setup theme cards.
+pub const fn setup_theme_swatch(dark: bool) -> (u32, u32, u32, u32) {
+    if dark {
+        (0x0B0D10, 0x12151B, 0x232833, 0xF3F4F6)
+    } else {
+        (0xFAFAFB, 0xFFFFFF, 0xD1D5DB, 0x111827)
+    }
+}
+
 /// Depth fill curve for live Hall-effect travel telemetry (`0.0..=max_mm`).
 pub fn depth_fill_hsla(mm: f64, max_mm: f64, is_dark: bool) -> Hsla {
     let ratio = (mm / max_mm.max(0.5)).clamp(0.0, 1.0) as f32;

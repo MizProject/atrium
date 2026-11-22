@@ -1,5 +1,5 @@
-//! First-start onboarding wizard, permissions/daemon checks, unsupported 3D/HID prober,
-//! MizProject disclaimer, and language/theme setup.
+//! Full-screen onboarding wizard: language/theme, MizProject disclaimer,
+//! system permission & daemon checks, and hardware / unsupported HID prober.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Selectable as _;
@@ -18,18 +18,17 @@ use gpui_kit::component::text::TextView;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     Context, Div, MouseButton, MouseDownEvent, MouseMoveEvent, ObjectFit, ParentElement as _,
-    ScrollDelta, ScrollEvent, SharedString, Styled as _, div, img, prelude::*, px,
+    ScrollDelta, ScrollEvent, SharedString, Styled as _, div, img, prelude::*, px, rgb,
 };
 
 use reaula_core::hid_probe::ProbeCheckStatus;
 use reaula_core::keyboards;
 
 use crate::ReaulaGui;
-use crate::config::AppLanguage;
 use crate::i18n::UiText;
 use crate::kb_3d::{CameraPreset, KB3D_HEIGHT, KB3D_WIDTH};
 use crate::state::{NavSection, SetupHardwareMode};
-use crate::theme::HardwareColors;
+use crate::theme::{self, HardwareColors};
 use crate::widgets::{MetricCell, render_metric_table, render_unsupported_2d_canvas};
 
 const GH_UNSUPPORTED_ISSUE_URL: &str =
@@ -42,6 +41,8 @@ impl ReaulaGui {
         let t = self.text();
         let step = self.setup.step.min(4);
         let can_finish = self.setup.disclaimer_accepted;
+        let wide_probe = step == 3 && self.setup.hw_mode == SetupHardwareMode::UnsupportedProbe;
+        let container_max_w = if wide_probe { px(1100.0) } else { px(860.0) };
 
         let stepper = Stepper::new("setup-wizard-stepper")
             .small()
@@ -83,53 +84,53 @@ impl ReaulaGui {
                     .child(div().text_xs().child(t.step_finish)),
             );
 
-        let header_card = GroupBox::new()
-            .outline()
+        let mut title_row = h_flex()
+            .w_full()
+            .min_w_0()
+            .flex_wrap()
+            .justify_between()
+            .items_start()
+            .gap_3()
             .child(
                 v_flex()
-                    .w_full()
-                    .min_w_0()
-                    .gap_3()
+                    .flex_1()
+                    .min_w(px(260.0))
+                    .gap_1()
+                    .child(div().text_xl().child(t.setup_title))
                     .child(
-                        h_flex()
+                        div()
                             .w_full()
                             .min_w_0()
-                            .flex_wrap()
-                            .justify_between()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                v_flex()
-                                    .flex_1()
-                                    .min_w(px(240.0))
-                                    .gap_1()
-                                    .child(div().text_base().child(t.setup_title))
-                                    .child(
-                                        div()
-                                            .w_full()
-                                            .min_w_0()
-                                            .whitespace_normal()
-                                            .text_xs()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(t.setup_subtitle),
-                                    ),
-                            )
-                            .child(
-                                h_flex()
-                                    .gap_2()
-                                    .child(
-                                        Button::new("setup-open-main-quick")
-                                            .xsmall()
-                                            .outline()
-                                            .label(t.nav_main)
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.switch_section(NavSection::Main, cx);
-                                            })),
-                                    ),
-                            ),
-                    )
-                    .child(div().w_full().min_w_0().overflow_hidden().child(stepper)),
+                            .whitespace_normal()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t.setup_subtitle),
+                    ),
             );
+
+        // Returning users who already completed onboarding can exit Setup cleanly;
+        // first-time users complete Setup before entering the main workbench.
+        if self.config.setup_completed {
+            title_row = title_row.child(
+                Button::new("setup-return-main")
+                    .xsmall()
+                    .outline()
+                    .label(t.nav_main)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.switch_section(NavSection::Main, cx);
+                    })),
+            );
+        }
+
+        let wizard_header = v_flex()
+            .w_full()
+            .min_w_0()
+            .gap_4()
+            .pb_4()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .child(title_row)
+            .child(div().w_full().min_w_0().overflow_hidden().child(stepper));
 
         let body = match step {
             0 => self.view_setup_step_welcome(t, cx),
@@ -139,41 +140,20 @@ impl ReaulaGui {
             _ => self.view_setup_step_finish(t, cx),
         };
 
-        let mut footer = h_flex()
-            .w_full()
-            .min_w_0()
-            .flex_wrap()
-            .justify_between()
-            .items_center()
-            .gap_2()
-            .pt_2()
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(
-                        Button::new("setup-btn-back")
-                            .small()
-                            .outline()
-                            .disabled(step == 0)
-                            .icon(Icon::new(IconName::ArrowLeft))
-                            .label(t.back_btn)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.setup.step = this.setup.step.saturating_sub(1);
-                                cx.notify();
-                            })),
-                    ),
-            );
-
         let next_group = if step < 4 {
             let block_disclaimer = step == 1 && !self.setup.disclaimer_accepted;
             h_flex()
-                .gap_2()
+                .flex_wrap()
+                .gap_3()
                 .items_center()
                 .when(block_disclaimer, |el| {
                     el.child(
-                        div()
+                        h_flex()
+                            .items_center()
+                            .gap_1()
                             .text_xs()
                             .text_color(cx.theme().warning)
+                            .child(Icon::new(IconName::TriangleAlert).xsmall())
                             .child(t.disclaimer_must_accept),
                     )
                 })
@@ -202,13 +182,17 @@ impl ReaulaGui {
                 )
         } else {
             h_flex()
-                .gap_2()
+                .flex_wrap()
+                .gap_3()
                 .items_center()
                 .when(!can_finish, |el| {
                     el.child(
-                        div()
+                        h_flex()
+                            .items_center()
+                            .gap_1()
                             .text_xs()
                             .text_color(cx.theme().warning)
+                            .child(Icon::new(IconName::TriangleAlert).xsmall())
                             .child(t.disclaimer_must_accept),
                     )
                 })
@@ -225,140 +209,129 @@ impl ReaulaGui {
                 )
         };
 
-        footer = footer.child(next_group);
-
-        v_flex()
+        let footer = h_flex()
             .w_full()
             .min_w_0()
+            .flex_wrap()
+            .justify_between()
+            .items_center()
             .gap_3()
-            .child(header_card.w_full().min_w_0().overflow_hidden())
-            .child(body)
-            .child(footer)
+            .pt_4()
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        Button::new("setup-btn-back")
+                            .small()
+                            .outline()
+                            .disabled(step == 0)
+                            .icon(Icon::new(IconName::ArrowLeft))
+                            .label(t.back_btn)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.setup.step = this.setup.step.saturating_sub(1);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(format!("Step {} / 5", step + 1)),
+                    ),
+            )
+            .child(next_group);
+
+        v_flex().w_full().min_w_0().items_center().py_6().px_2().child(
+            v_flex()
+                .w_full()
+                .max_w(container_max_w)
+                .min_w_0()
+                .gap_5()
+                .child(wizard_header)
+                .child(body)
+                .child(footer),
+        )
     }
 
     fn view_setup_step_welcome(&self, t: &'static UiText, cx: &mut Context<Self>) -> Div {
         let is_dark = cx.theme().is_dark();
 
-        let lang_card = GroupBox::new()
-            .outline()
-            .title(t.choose_language)
-            .child(
-                v_flex()
-                    .w_full()
-                    .min_w_0()
-                    .gap_2()
-                    .child(
-                        div()
-                            .w_full()
-                            .min_w_0()
-                            .child(Select::new(&self.sel_setup_lang).small()),
-                    )
-                    .child(
-                        div()
-                            .w_full()
-                            .min_w_0()
-                            .whitespace_normal()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(
-                                AppLanguage::ALL
-                                    .iter()
-                                    .map(|l| l.display_name())
-                                    .collect::<Vec<_>>()
-                                    .join(" | "),
-                            ),
-                    ),
-            );
-
-        let theme_card = GroupBox::new()
-            .outline()
-            .title(t.choose_theme)
-            .child(
-                v_flex()
-                    .w_full()
-                    .min_w_0()
-                    .gap_2()
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .gap_2()
-                            .child(
-                                Button::new("setup-theme-dark")
-                                    .small()
-                                    .flex_1()
-                                    .selected(is_dark)
-                                    .outline()
-                                    .icon(Icon::new(IconName::Moon))
-                                    .label(t.dark_mode_label)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.set_theme_dark(true, cx);
-                                    })),
-                            )
-                            .child(
-                                Button::new("setup-theme-light")
-                                    .small()
-                                    .flex_1()
-                                    .selected(!is_dark)
-                                    .outline()
-                                    .icon(Icon::new(IconName::Sun))
-                                    .label(t.light_mode_label)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.set_theme_dark(false, cx);
-                                    })),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .w_full()
-                            .min_w_0()
-                            .whitespace_normal()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("Clinical monochrome light/dark theme tokens can be toggled at any time from the top header."),
-                    ),
-            );
-
-        let guide_steps = GroupBox::new()
-            .outline()
-            .title("Onboarding Checklist")
-            .child(render_metric_table(
-                vec![
-                    MetricCell::text("Step 1", t.step_welcome, cx),
-                    MetricCell::text("Step 2", t.step_disclaimer, cx),
-                    MetricCell::text("Step 3", t.step_system, cx),
-                    MetricCell::text("Step 4", t.step_hardware, cx),
-                ],
-                180.0,
-                cx,
-            ));
-
-        v_flex()
+        let lang_row = v_flex()
             .w_full()
             .min_w_0()
+            .p_4()
+            .gap_2p5()
+            .rounded(cx.theme().radius_lg)
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().group_box)
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(Icon::new(IconName::Globe).small())
+                    .child(div().text_sm().child(t.choose_language)),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .max_w(px(420.0))
+                    .min_w_0()
+                    .child(Select::new(&self.sel_setup_lang).small()),
+            );
+
+        let theme_section = v_flex()
+            .w_full()
+            .min_w_0()
+            .p_4()
             .gap_3()
+            .rounded(cx.theme().radius_lg)
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().group_box)
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(Icon::new(if is_dark {
+                        IconName::Moon
+                    } else {
+                        IconName::Sun
+                    })
+                    .small())
+                    .child(div().text_sm().child(t.choose_theme)),
+            )
             .child(
                 h_flex()
                     .w_full()
                     .min_w_0()
                     .flex_wrap()
-                    .items_stretch()
                     .gap_3()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(280.0))
-                            .overflow_hidden()
-                            .child(lang_card.w_full().min_w_0().overflow_hidden()),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(280.0))
-                            .overflow_hidden()
-                            .child(theme_card.w_full().min_w_0().overflow_hidden()),
-                    ),
-            )
-            .child(guide_steps.w_full().min_w_0().overflow_hidden())
+                    .child(theme_preview_card(
+                        "setup-theme-dark",
+                        true,
+                        is_dark,
+                        t.dark_mode_label,
+                        cx,
+                    ))
+                    .child(theme_preview_card(
+                        "setup-theme-light",
+                        false,
+                        !is_dark,
+                        t.light_mode_label,
+                        cx,
+                    )),
+            );
+
+        v_flex()
+            .w_full()
+            .min_w_0()
+            .gap_4()
+            .child(lang_row)
+            .child(theme_section)
     }
 
     fn view_setup_step_disclaimer(&self, t: &'static UiText, cx: &mut Context<Self>) -> Div {
@@ -377,7 +350,7 @@ impl ReaulaGui {
                     .min_w_0()
                     .items_start()
                     .gap_2p5()
-                    .p_2p5()
+                    .p_3()
                     .rounded(cx.theme().radius)
                     .border_1()
                     .border_color(cx.theme().border)
@@ -394,79 +367,75 @@ impl ReaulaGui {
             );
         }
 
-        v_flex()
-            .w_full()
-            .min_w_0()
-            .child(
-                GroupBox::new()
-                    .outline()
-                    .title(t.disclaimer_heading)
-                    .child(
-                        v_flex()
-                            .w_full()
-                            .min_w_0()
-                            .gap_3()
-                            .child(list)
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .min_w_0()
-                                    .flex_wrap()
-                                    .justify_between()
-                                    .items_center()
-                                    .gap_2()
-                                    .p_2p5()
-                                    .rounded(cx.theme().radius)
-                                    .border_1()
-                                    .border_color(if self.setup.disclaimer_accepted {
-                                        cx.theme().success
-                                    } else {
-                                        cx.theme().warning
-                                    })
-                                    .child(
-                                        Checkbox::new("setup-disclaimer-ack")
-                                            .checked(self.setup.disclaimer_accepted)
-                                            .label(t.disclaimer_accept_chk)
-                                            .on_click(cx.listener(|this, next: &bool, _, cx| {
-                                                this.setup.disclaimer_accepted = *next;
-                                                this.config.disclaimer_accepted = *next;
-                                                this.persist_config();
-                                                cx.notify();
-                                            })),
-                                    )
-                                    .child(
-                                        Link::new("setup-issues-link")
-                                            .href(GH_SUPPORT_ISSUE_URL)
-                                            .child(
-                                                h_flex()
-                                                    .items_center()
-                                                    .gap_1()
-                                                    .text_xs()
-                                                    .child(Icon::new(IconName::ExternalLink).xsmall())
-                                                    .child("GitHub Issues"),
-                                            ),
-                                    ),
-                            ),
-                    ),
-            )
+        v_flex().w_full().min_w_0().child(
+            GroupBox::new()
+                .outline()
+                .title(t.disclaimer_heading)
+                .child(
+                    v_flex()
+                        .w_full()
+                        .min_w_0()
+                        .gap_3()
+                        .child(list)
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .min_w_0()
+                                .flex_wrap()
+                                .justify_between()
+                                .items_center()
+                                .gap_2()
+                                .p_3()
+                                .rounded(cx.theme().radius)
+                                .border_1()
+                                .border_color(if self.setup.disclaimer_accepted {
+                                    cx.theme().success
+                                } else {
+                                    cx.theme().warning
+                                })
+                                .child(
+                                    Checkbox::new("setup-disclaimer-ack")
+                                        .checked(self.setup.disclaimer_accepted)
+                                        .label(t.disclaimer_accept_chk)
+                                        .on_click(cx.listener(|this, next: &bool, _, cx| {
+                                            this.setup.disclaimer_accepted = *next;
+                                            this.config.disclaimer_accepted = *next;
+                                            this.persist_config();
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    Link::new("setup-issues-link")
+                                        .href(GH_SUPPORT_ISSUE_URL)
+                                        .child(
+                                            h_flex()
+                                                .items_center()
+                                                .gap_1()
+                                                .text_xs()
+                                                .child(Icon::new(IconName::ExternalLink).xsmall())
+                                                .child("GitHub Issues"),
+                                        ),
+                                ),
+                        ),
+                ),
+        )
     }
 
     fn view_setup_step_system(&self, t: &'static UiText, cx: &mut Context<Self>) -> Div {
         let env = &self.setup.env_status;
         let hid_ok = env.hidraw_rw_ok > 0;
-        let udev_cmd =
-            "sudo install -m 644 udev/99-aula-win60he.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules && sudo udevadm trigger";
+        let udev_cmd = "sudo install -m 644 udev/99-aula-win60he.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules && sudo udevadm trigger";
         let systemd_cmd = "systemctl --user enable --now reaulad.service";
 
         let metrics = render_metric_table(
             vec![
                 MetricCell::element(
                     "HID Devices",
-                    status_pill(hid_ok, &env.hidraw_summary, cx),
+                    status_indicator(hid_ok, &env.hidraw_summary, cx),
                 ),
                 MetricCell::element(
                     "udev Rules",
-                    status_pill(
+                    status_indicator(
                         env.udev_rule_present,
                         if env.udev_rule_present {
                             env.udev_rule_path.clone()
@@ -478,14 +447,14 @@ impl ReaulaGui {
                 ),
                 MetricCell::element(
                     "/dev/uinput",
-                    status_pill(env.uinput_ok, &env.uinput_detail, cx),
+                    status_indicator(env.uinput_ok, &env.uinput_detail, cx),
                 ),
                 MetricCell::element(
                     "reaulad IPC",
-                    status_pill(env.daemon_connected, &env.daemon_detail, cx),
+                    status_indicator(env.daemon_connected, &env.daemon_detail, cx),
                 ),
             ],
-            240.0,
+            220.0,
             cx,
         );
 
@@ -513,57 +482,54 @@ impl ReaulaGui {
             ));
         }
 
-        v_flex()
-            .w_full()
-            .min_w_0()
-            .child(
-                GroupBox::new()
-                    .outline()
-                    .title(t.system_heading)
-                    .child(
-                        v_flex()
-                            .w_full()
-                            .min_w_0()
-                            .gap_3()
-                            .child(
-                                div()
-                                    .w_full()
-                                    .min_w_0()
-                                    .whitespace_normal()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(t.system_subtitle),
-                            )
-                            .child(
-                                h_flex()
-                                    .flex_wrap()
-                                    .gap_2()
-                                    .child(
-                                        Button::new("setup-refresh-sys")
-                                            .small()
-                                            .outline()
-                                            .icon(Icon::new(IconName::RefreshCw))
-                                            .label(t.refresh_checks)
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.refresh_setup_checks(window, cx);
-                                            })),
-                                    )
-                                    .child(
-                                        Button::new("setup-reconnect-daemon")
-                                            .small()
-                                            .primary()
-                                            .icon(Icon::new(IconName::RefreshCw))
-                                            .label(t.reconnect_daemon)
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.reconnect(window, cx);
-                                                this.refresh_setup_checks(window, cx);
-                                            })),
-                                    ),
-                            )
-                            .child(metrics)
-                            .child(remedies),
-                    ),
-            )
+        v_flex().w_full().min_w_0().child(
+            GroupBox::new()
+                .outline()
+                .title(t.system_heading)
+                .child(
+                    v_flex()
+                        .w_full()
+                        .min_w_0()
+                        .gap_3()
+                        .child(
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .whitespace_normal()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t.system_subtitle),
+                        )
+                        .child(
+                            h_flex()
+                                .flex_wrap()
+                                .gap_2()
+                                .child(
+                                    Button::new("setup-refresh-sys")
+                                        .small()
+                                        .outline()
+                                        .icon(Icon::new(IconName::RefreshCw))
+                                        .label(t.refresh_checks)
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.refresh_setup_checks(window, cx);
+                                        })),
+                                )
+                                .child(
+                                    Button::new("setup-reconnect-daemon")
+                                        .small()
+                                        .primary()
+                                        .icon(Icon::new(IconName::RefreshCw))
+                                        .label(t.reconnect_daemon)
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.reconnect(window, cx);
+                                            this.refresh_setup_checks(window, cx);
+                                        })),
+                                ),
+                        )
+                        .child(metrics)
+                        .child(remedies),
+                ),
+        )
     }
 
     fn view_setup_step_hardware(&self, t: &'static UiText, cx: &mut Context<Self>) -> Div {
@@ -596,22 +562,26 @@ impl ReaulaGui {
             SetupHardwareMode::UnsupportedProbe => self.view_setup_unsupported_studio(t, cx),
         };
 
-        v_flex()
-            .w_full()
-            .min_w_0()
-            .child(
-                GroupBox::new()
-                    .outline()
-                    .title(t.hardware_heading)
-                    .child(
-                        v_flex()
-                            .w_full()
-                            .min_w_0()
-                            .gap_3()
-                            .child(h_flex().w_full().flex_wrap().justify_between().gap_2().child(mode_tabs))
-                            .child(inner),
-                    ),
-            )
+        v_flex().w_full().min_w_0().child(
+            GroupBox::new()
+                .outline()
+                .title(t.hardware_heading)
+                .child(
+                    v_flex()
+                        .w_full()
+                        .min_w_0()
+                        .gap_3()
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .flex_wrap()
+                                .justify_between()
+                                .gap_2()
+                                .child(mode_tabs),
+                        )
+                        .child(inner),
+                ),
+        )
     }
 
     fn view_setup_supported_picker(&self, t: &'static UiText, cx: &mut Context<Self>) -> Div {
@@ -628,9 +598,11 @@ impl ReaulaGui {
             let spec_id = spec.id;
 
             let detect_badge = match detected {
-                Some((_, _, true)) => status_pill(true, "Detected on USB (R/W)", cx),
-                Some((_, _, false)) => status_pill(false, "Detected (needs udev R/W)", cx),
-                None => status_pill(false, "Not attached or wireless asleep", cx),
+                Some((_, _, true)) => status_indicator(true, "Detected on USB (R/W)", cx),
+                Some((_, _, false)) => {
+                    status_indicator(false, "Detected (needs udev R/W)", cx)
+                }
+                None => status_indicator(false, "Not attached or wireless asleep", cx),
             };
 
             cards = cards.child(
@@ -670,7 +642,7 @@ impl ReaulaGui {
                                     .text_xs()
                                     .text_color(cx.theme().muted_foreground)
                                     .child(format!(
-                                        "{} · {} keys · USB {:04X}:{:04X} · Full analog calibration, keymap & RGB support",
+                                        "{} · {} keys · USB {:04X}:{:04X} · Full analog calibration, keymap & RGB",
                                         spec.form_factor,
                                         spec.keys.len(),
                                         usb.vid,
@@ -713,21 +685,6 @@ impl ReaulaGui {
                     .child(t.select_supported_desc),
             )
             .child(cards)
-            .child(
-                h_flex().child(
-                    Button::new("setup-switch-to-probe")
-                        .small()
-                        .outline()
-                        .icon(Icon::new(IconName::Usb))
-                        .label(t.unsupported_hw_tab)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.setup.hw_mode = SetupHardwareMode::UnsupportedProbe;
-                            this.refresh_setup_env_only();
-                            this.maybe_render_setup_3d();
-                            cx.notify();
-                        })),
-                ),
-            )
     }
 
     fn view_setup_unsupported_studio(&self, t: &'static UiText, cx: &mut Context<Self>) -> Div {
@@ -736,6 +693,7 @@ impl ReaulaGui {
         } else {
             self.setup.model_name_hint.trim()
         };
+        let has_hid = !self.setup.hid_candidates.is_empty();
 
         let left_3d_panel = self.render_unsupported_stage_box("setup-stage", model_label, cx);
 
@@ -798,19 +756,28 @@ impl ReaulaGui {
             .child(
                 h_flex()
                     .flex_wrap()
+                    .items_center()
                     .gap_2()
                     .child(
                         Button::new("setup-run-probe")
                             .small()
                             .primary()
+                            .disabled(!has_hid)
                             .icon(Icon::new(IconName::Cpu))
                             .label(t.run_probe_btn)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.run_setup_probe(cx);
                             })),
-                    ),
-            )
-            .child(Alert::info("setup-dev-followup", t.dev_followup_notice));
+                    )
+                    .when(!has_hid, |el| {
+                        el.child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().warning)
+                                .child("No /dev/hidraw* nodes detected. Connect USB and click Refresh."),
+                        )
+                    }),
+            );
 
         if let Some(err) = &self.setup.probe_error {
             right_probe_panel =
@@ -906,7 +873,8 @@ impl ReaulaGui {
                                         .child(t.open_issue_btn),
                                 ),
                         ),
-                );
+                )
+                .child(Alert::info("setup-dev-followup", t.dev_followup_notice));
 
             if let Some(saved) = &self.setup.saved_probe_path {
                 right_probe_panel = right_probe_panel.child(
@@ -1172,25 +1140,21 @@ impl ReaulaGui {
             cx,
         );
 
-        v_flex()
-            .w_full()
-            .min_w_0()
-            .child(
-                GroupBox::new()
-                    .outline()
-                    .title(t.summary_heading)
-                    .child(
-                        v_flex()
-                            .w_full()
-                            .min_w_0()
-                            .gap_3()
-                            .child(summary_table)
-                            .child(Alert::info("setup-finish-dev", t.dev_followup_notice))
-                            .child(
-                                h_flex()
-                                    .flex_wrap()
-                                    .gap_2()
-                                    .child(
+        let is_unsupported = self.setup.hw_mode == SetupHardwareMode::UnsupportedProbe;
+        v_flex().w_full().min_w_0().child(
+            GroupBox::new()
+                .outline()
+                .title(t.summary_heading)
+                .child(
+                    v_flex()
+                        .w_full()
+                        .min_w_0()
+                        .gap_3()
+                        .child(summary_table)
+                        .when(is_unsupported, |el| {
+                            el.child(Alert::info("setup-finish-dev", t.dev_followup_notice))
+                                .child(
+                                    h_flex().flex_wrap().gap_2().child(
                                         Link::new("setup-finish-issue-link")
                                             .href(GH_UNSUPPORTED_ISSUE_URL)
                                             .child(
@@ -1202,10 +1166,80 @@ impl ReaulaGui {
                                                     .child(t.open_issue_btn),
                                             ),
                                     ),
-                            ),
-                    ),
-            )
+                                )
+                        }),
+                ),
+        )
     }
+}
+
+fn theme_preview_card(
+    id: &'static str,
+    target_dark: bool,
+    selected: bool,
+    label: &'static str,
+    cx: &mut Context<ReaulaGui>,
+) -> Div {
+    let (canvas_hex, card_hex, border_hex, fg_hex) = theme::setup_theme_swatch(target_dark);
+
+    let swatch = v_flex()
+        .w_full()
+        .h(px(46.0))
+        .p_1p5()
+        .gap_1()
+        .rounded(cx.theme().radius)
+        .border_1()
+        .border_color(rgb(border_hex))
+        .bg(rgb(canvas_hex))
+        .child(
+            h_flex()
+                .items_center()
+                .justify_between()
+                .child(div().w(px(34.0)).h(px(6.0)).rounded_sm().bg(rgb(fg_hex)))
+                .child(div().w(px(14.0)).h(px(6.0)).rounded_sm().bg(rgb(border_hex))),
+        )
+        .child(
+            div()
+                .flex_1()
+                .w_full()
+                .rounded_sm()
+                .border_1()
+                .border_color(rgb(border_hex))
+                .bg(rgb(card_hex)),
+        );
+
+    v_flex()
+        .flex_1()
+        .min_w(px(210.0))
+        .gap_2()
+        .p_2p5()
+        .rounded(cx.theme().radius)
+        .border_1()
+        .border_color(if selected {
+            cx.theme().primary
+        } else {
+            cx.theme().border
+        })
+        .bg(cx.theme().background)
+        .child(swatch)
+        .child(
+            Button::new(id)
+                .small()
+                .w_full()
+                .selected(selected)
+                .outline()
+                .icon(Icon::new(if selected {
+                    IconName::Check
+                } else if target_dark {
+                    IconName::Moon
+                } else {
+                    IconName::Sun
+                }))
+                .label(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.set_theme_dark(target_dark, cx);
+                })),
+        )
 }
 
 fn setup_preset_btn(
@@ -1225,22 +1259,28 @@ fn setup_preset_btn(
         }))
 }
 
-fn status_pill(ok: bool, text: impl Into<SharedString>, cx: &gpui_kit::App) -> gpui_kit::AnyElement {
+fn status_indicator(
+    ok: bool,
+    text: impl Into<SharedString>,
+    cx: &gpui_kit::App,
+) -> gpui_kit::AnyElement {
     h_flex()
         .min_w_0()
         .items_center()
         .gap_1p5()
         .child(
             div()
-                .w(px(7.0))
-                .h(px(7.0))
                 .flex_shrink_0()
-                .rounded(cx.theme().radius_full())
-                .bg(if ok {
+                .text_color(if ok {
                     cx.theme().success
                 } else {
                     cx.theme().warning
-                }),
+                })
+                .child(Icon::new(if ok {
+                    IconName::CircleCheck
+                } else {
+                    IconName::TriangleAlert
+                }).xsmall()),
         )
         .child(
             div()
