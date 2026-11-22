@@ -5,6 +5,7 @@ mod diagnostics;
 mod keymaps;
 pub(crate) mod lighting;
 mod main_view;
+mod setup;
 
 use std::cell::Cell;
 
@@ -18,6 +19,7 @@ use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _
 use gpui_kit::{AnyElement, Context, IntoElement as _, ParentElement as _, Styled as _, Window, div, px};
 
 use crate::ReaulaGui;
+use crate::config::ConfiguredKeyboardKind;
 use crate::state::{AUDIO_DISCLAIMER_COOLDOWN_SECS, NavSection};
 
 impl ReaulaGui {
@@ -26,18 +28,82 @@ impl ReaulaGui {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let active_unsupported = self
+            .config
+            .active_keyboard()
+            .filter(|k| k.kind == ConfiguredKeyboardKind::Unsupported);
+
         match self.nav {
+            NavSection::Setup => self.view_setup(cx).into_any_element(),
+            NavSection::Main => self.view_main_hub(cx).into_any_element(),
             NavSection::Diagnostics => self.view_diagnostics(cx).into_any_element(),
-            _ => match &self.conn {
-                Err(err) => self.view_disconnected(err, cx),
-                Ok(state) => match self.nav {
-                    NavSection::Main => self.view_main(state, cx).into_any_element(),
-                    NavSection::Calibration => self.view_calibration(state, cx).into_any_element(),
-                    NavSection::ColorLight => self.view_color_light(state, cx).into_any_element(),
-                    NavSection::Hotkeys => self.view_hotkeys(state, window, cx).into_any_element(),
-                    NavSection::Diagnostics => unreachable!(),
-                },
-            },
+            NavSection::ColorLight => {
+                if let Some(kb) = active_unsupported {
+                    self.view_unsupported_board_panel(kb, cx).into_any_element()
+                } else {
+                    match &self.conn {
+                        Err(err) => self.view_disconnected(err, cx),
+                        Ok(state) => self.view_color_light(state, cx).into_any_element(),
+                    }
+                }
+            }
+            _ => {
+                if let Some(kb) = active_unsupported {
+                    v_flex()
+                        .gap_3()
+                        .child(
+                            Alert::info(
+                                "unsupported-section-note",
+                                format!(
+                                    "{} is configured as an Unsupported / Probe keyboard. Per-key magnetic calibration and firmware flash keymaps apply to natively supported drivers (such as AULA WIN 60 HE).",
+                                    kb.label
+                                ),
+                            )
+                            .title("Hardware Feature Requires Supported Driver"),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .child(
+                                    Button::new("unsup-open-main")
+                                        .small()
+                                        .primary()
+                                        .label(self.text().nav_main)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.switch_section(NavSection::Main, cx);
+                                        })),
+                                )
+                                .child(
+                                    Button::new("unsup-open-probe")
+                                        .small()
+                                        .outline()
+                                        .label("Probe HID / Submit Issue\u{2026}")
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.open_setup_at_step(
+                                                3,
+                                                Some(crate::state::SetupHardwareMode::UnsupportedProbe),
+                                                window,
+                                                cx,
+                                            );
+                                        })),
+                                ),
+                        )
+                        .into_any_element()
+                } else {
+                    match &self.conn {
+                        Err(err) => self.view_disconnected(err, cx),
+                        Ok(state) => match self.nav {
+                            NavSection::Calibration => {
+                                self.view_calibration(state, cx).into_any_element()
+                            }
+                            NavSection::Hotkeys => {
+                                self.view_hotkeys(state, window, cx).into_any_element()
+                            }
+                            _ => unreachable!(),
+                        },
+                    }
+                }
+            }
         }
     }
 

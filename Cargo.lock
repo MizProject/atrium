@@ -5787,6 +5787,8 @@ dependencies = [
  "image",
  "pollster",
  "reaula-core",
+ "serde",
+ "serde_json",
  "smallvec",
  "wgpu",
 ]

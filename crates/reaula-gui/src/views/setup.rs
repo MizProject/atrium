@@ -1,0 +1,1291 @@
+//! First-start onboarding wizard, permissions/daemon checks, unsupported 3D/HID prober,
+//! MizProject disclaimer, and language/theme setup.
+
+use gpui_kit::assets::IconName;
+use gpui_kit::base::Selectable as _;
+use gpui_kit::component::alert::Alert;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::clipboard::Clipboard;
+use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants as _};
+use gpui_kit::component::input::Input;
+use gpui_kit::component::link::Link;
+use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::select::Select;
+use gpui_kit::component::stepper::{Stepper, StepperItem};
+use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::text::TextView;
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, v_flex};
+use gpui_kit::{
+    Context, Div, MouseButton, MouseDownEvent, MouseMoveEvent, ObjectFit, ParentElement as _,
+    ScrollDelta, ScrollEvent, SharedString, Styled as _, div, img, prelude::*, px,
+};
+
+use reaula_core::hid_probe::ProbeCheckStatus;
+use reaula_core::keyboards;
+
+use crate::ReaulaGui;
+use crate::config::AppLanguage;
+use crate::i18n::UiText;
+use crate::kb_3d::{CameraPreset, KB3D_HEIGHT, KB3D_WIDTH};
+use crate::state::{NavSection, SetupHardwareMode};
+use crate::theme::HardwareColors;
+use crate::widgets::{MetricCell, render_metric_table, render_unsupported_2d_canvas};
+
+const GH_UNSUPPORTED_ISSUE_URL: &str =
+    "https://github.com/MizProject/reaula/issues/new?template=unsupported-keyboard-support.yml";
+const GH_SUPPORT_ISSUE_URL: &str =
+    "https://github.com/MizProject/reaula/issues/new?template=support-request.yml";
+
+impl ReaulaGui {
+    pub(crate) fn view_setup(&self, cx: &mut Context<Self>) -> Div {
+        let t = self.text();
+        let step = self.setup.step.min(4);
+        let can_finish = self.setup.disclaimer_accepted;
+
+        let stepper = Stepper::new("setup-wizard-stepper")
+            .small()
+            .selected_index(step)
+            .on_click(cx.listener(|this, ix: &usize, _, cx| {
+                this.setup.step = (*ix).min(4);
+                if this.setup.step == 2 || this.setup.step == 3 {
+                    this.refresh_setup_env_only();
+                }
+                if this.setup.step == 3 && this.setup.hw_mode == SetupHardwareMode::UnsupportedProbe
+                {
+                    this.maybe_render_setup_3d();
+                }
+                cx.notify();
+            }))
+            .item(
+                StepperItem::new()
+                    .icon(IconName::Globe)
+                    .child(div().text_xs().child(t.step_welcome)),
+            )
+            .item(
+                StepperItem::new()
+                    .icon(IconName::ShieldCheck)
+                    .child(div().text_xs().child(t.step_disclaimer)),
+            )
+            .item(
+                StepperItem::new()
+                    .icon(IconName::Cpu)
+                    .child(div().text_xs().child(t.step_system)),
+            )
+            .item(
+                StepperItem::new()
+                    .icon(IconName::Keyboard)
+                    .child(div().text_xs().child(t.step_hardware)),
+            )
+            .item(
+                StepperItem::new()
+                    .icon(IconName::Check)
+                    .child(div().text_xs().child(t.step_finish)),
+            );
+
+        let header_card = GroupBox::new()
+            .outline()
+            .child(
+                v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap_3()
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .min_w_0()
+                            .flex_wrap()
+                            .justify_between()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w(px(240.0))
+                                    .gap_1()
+                                    .child(div().text_base().child(t.setup_title))
+                                    .child(
+                                        div()
+                                            .w_full()
+                                            .min_w_0()
+                                            .whitespace_normal()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(t.setup_subtitle),
+                                    ),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .child(
+                                        Button::new("setup-open-main-quick")
+                                            .xsmall()
+                                            .outline()
+                                            .label(t.nav_main)
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.switch_section(NavSection::Main, cx);
+                                            })),
+                                    ),
+                            ),
+                    )
+                    .child(div().w_full().min_w_0().overflow_hidden().child(stepper)),
+            );
+
+        let body = match step {
+            0 => self.view_setup_step_welcome(t, cx),
+            1 => self.view_setup_step_disclaimer(t, cx),
+            2 => self.view_setup_step_system(t, cx),
+            3 => self.view_setup_step_hardware(t, cx),
+            _ => self.view_setup_step_finish(t, cx),
+        };
+
+        let mut footer = h_flex()
+            .w_full()
+            .min_w_0()
+            .flex_wrap()
+            .justify_between()
+            .items_center()
+            .gap_2()
+            .pt_2()
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(
+                        Button::new("setup-btn-back")
+                            .small()
+                            .outline()
+                            .disabled(step == 0)
+                            .icon(Icon::new(IconName::ArrowLeft))
+                            .label(t.back_btn)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.setup.step = this.setup.step.saturating_sub(1);
+                                cx.notify();
+                            })),
+                    ),
+            );
+
+        let next_group = if step < 4 {
+            let block_disclaimer = step == 1 && !self.setup.disclaimer_accepted;
+            h_flex()
+                .gap_2()
+                .items_center()
+                .when(block_disclaimer, |el| {
+                    el.child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().warning)
+                            .child(t.disclaimer_must_accept),
+                    )
+                })
+                .child(
+                    Button::new("setup-btn-next")
+                        .small()
+                        .primary()
+                        .disabled(block_disclaimer)
+                        .icon(Icon::new(IconName::ArrowRight))
+                        .label(t.next_btn)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if this.setup.step == 1 && !this.setup.disclaimer_accepted {
+                                return;
+                            }
+                            this.setup.step = (this.setup.step + 1).min(4);
+                            if this.setup.step == 2 || this.setup.step == 3 {
+                                this.refresh_setup_env_only();
+                            }
+                            if this.setup.step == 3
+                                && this.setup.hw_mode == SetupHardwareMode::UnsupportedProbe
+                            {
+                                this.maybe_render_setup_3d();
+                            }
+                            cx.notify();
+                        })),
+                )
+        } else {
+            h_flex()
+                .gap_2()
+                .items_center()
+                .when(!can_finish, |el| {
+                    el.child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().warning)
+                            .child(t.disclaimer_must_accept),
+                    )
+                })
+                .child(
+                    Button::new("setup-btn-finish")
+                        .small()
+                        .primary()
+                        .disabled(!can_finish)
+                        .icon(Icon::new(IconName::Check))
+                        .label(t.finish_setup_btn)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.commit_setup_and_open_main(cx);
+                        })),
+                )
+        };
+
+        footer = footer.child(next_group);
+
+        v_flex()
+            .w_full()
+            .min_w_0()
+            .gap_3()
+            .child(header_card.w_full().min_w_0().overflow_hidden())
+            .child(body)
+            .child(footer)
+    }
+
+    fn view_setup_step_welcome(&self, t: &'static UiText, cx: &mut Context<Self>) -> Div {
+        let is_dark = cx.theme().is_dark();
+
+        let lang_card = GroupBox::new()
+            .outline()
+            .title(t.choose_language)
+            .child(
+                v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap_2()
+                    .child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .child(Select::new(&self.sel_setup_lang).small()),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .whitespace_normal()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(
+                                AppLanguage::ALL
+                                    .iter()
+                                    .map(|l| l.display_name())
+                                    .collect::<Vec<_>>()
+                                    .join(" | "),
+                            ),
+                    ),
+            );
+
+        let theme_card = GroupBox::new()
+            .outline()
+            .title(t.choose_theme)
+            .child(
+                v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap_2()
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .gap_2()
+                            .child(
+                                Button::new("setup-theme-dark")
+                                    .small()
+                                    .flex_1()
+                                    .selected(is_dark)
+                                    .outline()
+                                    .icon(Icon::new(IconName::Moon))
+                                    .label(t.dark_mode_label)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.set_theme_dark(true, cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("setup-theme-light")
+                                    .small()
+                                    .flex_1()
+                                    .selected(!is_dark)
+                                    .outline()
+                                    .icon(Icon::new(IconName::Sun))
+                                    .label(t.light_mode_label)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.set_theme_dark(false, cx);
+                                    })),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .whitespace_normal()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Clinical monochrome light/dark theme tokens can be toggled at any time from the top header."),
+                    ),
+            );
+
+        let guide_steps = GroupBox::new()
+            .outline()
+            .title("Onboarding Checklist")
+            .child(render_metric_table(
+                vec![
+                    MetricCell::text("Step 1", t.step_welcome, cx),
+                    MetricCell::text("Step 2", t.step_disclaimer, cx),
+                    MetricCell::text("Step 3", t.step_system, cx),
+                    MetricCell::text("Step 4", t.step_hardware, cx),
+                ],
+                180.0,
+                cx,
+            ));
+
+        v_flex()
+            .w_full()
+            .min_w_0()
+            .gap_3()
+            .child(
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .flex_wrap()
+                    .items_stretch()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(280.0))
+                            .overflow_hidden()
+                            .child(lang_card.w_full().min_w_0().overflow_hidden()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(280.0))
+                            .overflow_hidden()
+                            .child(theme_card.w_full().min_w_0().overflow_hidden()),
+                    ),
+            )
+            .child(guide_steps.w_full().min_w_0().overflow_hidden())
+    }
+
+    fn view_setup_step_disclaimer(&self, t: &'static UiText, cx: &mut Context<Self>) -> Div {
+        let items = [
+            (IconName::ShieldCheck, t.disclaimer_privacy),
+            (IconName::TriangleAlert, t.disclaimer_liability),
+            (IconName::Globe, t.disclaimer_opensource),
+            (IconName::ExternalLink, t.disclaimer_issues),
+        ];
+
+        let mut list = v_flex().w_full().min_w_0().gap_2();
+        for (icon, text) in items {
+            list = list.child(
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .items_start()
+                    .gap_2p5()
+                    .p_2p5()
+                    .rounded(cx.theme().radius)
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().background)
+                    .child(Icon::new(icon).small())
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .whitespace_normal()
+                            .text_xs()
+                            .child(text),
+                    ),
+            );
+        }
+
+        v_flex()
+            .w_full()
+            .min_w_0()
+            .child(
+                GroupBox::new()
+                    .outline()
+                    .title(t.disclaimer_heading)
+                    .child(
+                        v_flex()
+                            .w_full()
+                            .min_w_0()
+                            .gap_3()
+                            .child(list)
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .min_w_0()
+                                    .flex_wrap()
+                                    .justify_between()
+                                    .items_center()
+                                    .gap_2()
+                                    .p_2p5()
+                                    .rounded(cx.theme().radius)
+                                    .border_1()
+                                    .border_color(if self.setup.disclaimer_accepted {
+                                        cx.theme().success
+                                    } else {
+                                        cx.theme().warning
+                                    })
+                                    .child(
+                                        Checkbox::new("setup-disclaimer-ack")
+                                            .checked(self.setup.disclaimer_accepted)
+                                            .label(t.disclaimer_accept_chk)
+                                            .on_click(cx.listener(|this, next: &bool, _, cx| {
+                                                this.setup.disclaimer_accepted = *next;
+                                                this.config.disclaimer_accepted = *next;
+                                                this.persist_config();
+                                                cx.notify();
+                                            })),
+                                    )
+                                    .child(
+                                        Link::new("setup-issues-link")
+                                            .href(GH_SUPPORT_ISSUE_URL)
+                                            .child(
+                                                h_flex()
+                                                    .items_center()
+                                                    .gap_1()
+                                                    .text_xs()
+                                                    .child(Icon::new(IconName::ExternalLink).xsmall())
+                                                    .child("GitHub Issues"),
+                                            ),
+                                    ),
+                            ),
+                    ),
+            )
+    }
+
+    fn view_setup_step_system(&self, t: &'static UiText, cx: &mut Context<Self>) -> Div {
+        let env = &self.setup.env_status;
+        let hid_ok = env.hidraw_rw_ok > 0;
+        let udev_cmd =
+            "sudo install -m 644 udev/99-aula-win60he.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules && sudo udevadm trigger";
+        let systemd_cmd = "systemctl --user enable --now reaulad.service";
+
+        let metrics = render_metric_table(
+            vec![
+                MetricCell::element(
+                    "HID Devices",
+                    status_pill(hid_ok, &env.hidraw_summary, cx),
+                ),
+                MetricCell::element(
+                    "udev Rules",
+                    status_pill(
+                        env.udev_rule_present,
+                        if env.udev_rule_present {
+                            env.udev_rule_path.clone()
+                        } else {
+                            "Missing 99-aula-win60he.rules".into()
+                        },
+                        cx,
+                    ),
+                ),
+                MetricCell::element(
+                    "/dev/uinput",
+                    status_pill(env.uinput_ok, &env.uinput_detail, cx),
+                ),
+                MetricCell::element(
+                    "reaulad IPC",
+                    status_pill(env.daemon_connected, &env.daemon_detail, cx),
+                ),
+            ],
+            240.0,
+            cx,
+        );
+
+        let mut remedies = v_flex().w_full().min_w_0().gap_2();
+        if !env.udev_rule_present || !hid_ok {
+            remedies = remedies.child(copy_command_row(
+                "setup-copy-udev",
+                "Install udev HID permission rules",
+                udev_cmd,
+                cx,
+            ));
+        }
+        if let Some(uinput_fix) = &env.uinput_remedy {
+            remedies = remedies.child(
+                Alert::warning("setup-uinput-warn", uinput_fix.clone())
+                    .title("/dev/uinput Permission / Module Check"),
+            );
+        }
+        if !env.daemon_connected {
+            remedies = remedies.child(copy_command_row(
+                "setup-copy-systemd",
+                "Start reaulad via systemd user unit (or CLI daemon start)",
+                systemd_cmd,
+                cx,
+            ));
+        }
+
+        v_flex()
+            .w_full()
+            .min_w_0()
+            .child(
+                GroupBox::new()
+                    .outline()
+                    .title(t.system_heading)
+                    .child(
+                        v_flex()
+                            .w_full()
+                            .min_w_0()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .w_full()
+                                    .min_w_0()
+                                    .whitespace_normal()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(t.system_subtitle),
+                            )
+                            .child(
+                                h_flex()
+                                    .flex_wrap()
+                                    .gap_2()
+                                    .child(
+                                        Button::new("setup-refresh-sys")
+                                            .small()
+                                            .outline()
+                                            .icon(Icon::new(IconName::RefreshCw))
+                                            .label(t.refresh_checks)
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.refresh_setup_checks(window, cx);
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new("setup-reconnect-daemon")
+                                            .small()
+                                            .primary()
+                                            .icon(Icon::new(IconName::RefreshCw))
+                                            .label(t.reconnect_daemon)
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.reconnect(window, cx);
+                                                this.refresh_setup_checks(window, cx);
+                                            })),
+                                    ),
+                            )
+                            .child(metrics)
+                            .child(remedies),
+                    ),
+            )
+    }
+
+    fn view_setup_step_hardware(&self, t: &'static UiText, cx: &mut Context<Self>) -> Div {
+        let mode_idx = match self.setup.hw_mode {
+            SetupHardwareMode::Supported => 0,
+            SetupHardwareMode::UnsupportedProbe => 1,
+        };
+
+        let mode_tabs = TabBar::new("setup-hw-mode-tabs")
+            .segmented()
+            .small()
+            .selected_index(mode_idx)
+            .on_click(cx.listener(|this, ix: &usize, _, cx| {
+                this.setup.hw_mode = if *ix == 1 {
+                    SetupHardwareMode::UnsupportedProbe
+                } else {
+                    SetupHardwareMode::Supported
+                };
+                if this.setup.hw_mode == SetupHardwareMode::UnsupportedProbe {
+                    this.refresh_setup_env_only();
+                    this.maybe_render_setup_3d();
+                }
+                cx.notify();
+            }))
+            .child(Tab::new().label(t.supported_hw_tab))
+            .child(Tab::new().label(t.unsupported_hw_tab));
+
+        let inner = match self.setup.hw_mode {
+            SetupHardwareMode::Supported => self.view_setup_supported_picker(t, cx),
+            SetupHardwareMode::UnsupportedProbe => self.view_setup_unsupported_studio(t, cx),
+        };
+
+        v_flex()
+            .w_full()
+            .min_w_0()
+            .child(
+                GroupBox::new()
+                    .outline()
+                    .title(t.hardware_heading)
+                    .child(
+                        v_flex()
+                            .w_full()
+                            .min_w_0()
+                            .gap_3()
+                            .child(h_flex().w_full().flex_wrap().justify_between().gap_2().child(mode_tabs))
+                            .child(inner),
+                    ),
+            )
+    }
+
+    fn view_setup_supported_picker(&self, t: &'static UiText, cx: &mut Context<Self>) -> Div {
+        let mut cards = v_flex().w_full().min_w_0().gap_2();
+        for (ix, spec) in keyboards::all().iter().enumerate() {
+            let usb = spec.primary_usb_id();
+            let detected = self
+                .setup
+                .env_status
+                .discovered_supported
+                .iter()
+                .find(|(id, _, _)| id == spec.id);
+            let selected = self.setup.selected_supported_id == spec.id;
+            let spec_id = spec.id;
+
+            let detect_badge = match detected {
+                Some((_, _, true)) => status_pill(true, "Detected on USB (R/W)", cx),
+                Some((_, _, false)) => status_pill(false, "Detected (needs udev R/W)", cx),
+                None => status_pill(false, "Not attached or wireless asleep", cx),
+            };
+
+            cards = cards.child(
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .flex_wrap()
+                    .justify_between()
+                    .items_center()
+                    .gap_3()
+                    .p_3()
+                    .rounded(cx.theme().radius)
+                    .border_1()
+                    .border_color(if selected {
+                        cx.theme().primary
+                    } else {
+                        cx.theme().border
+                    })
+                    .bg(cx.theme().background)
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w(px(220.0))
+                            .gap_1()
+                            .child(
+                                h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(Icon::new(IconName::Keyboard).small())
+                                    .child(div().text_sm().child(spec.display_name)),
+                            )
+                            .child(
+                                div()
+                                    .w_full()
+                                    .min_w_0()
+                                    .whitespace_normal()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(format!(
+                                        "{} · {} keys · USB {:04X}:{:04X} · Full analog calibration, keymap & RGB support",
+                                        spec.form_factor,
+                                        spec.keys.len(),
+                                        usb.vid,
+                                        usb.pid
+                                    )),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_2()
+                            .child(detect_badge)
+                            .child(
+                                Button::new(("setup-pick-supported", ix))
+                                    .xsmall()
+                                    .selected(selected)
+                                    .outline()
+                                    .label(if selected { "Selected" } else { "Select" })
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.setup.selected_supported_id = spec_id.to_string();
+                                        this.setup.hw_mode = SetupHardwareMode::Supported;
+                                        cx.notify();
+                                    })),
+                            ),
+                    ),
+            );
+        }
+
+        v_flex()
+            .w_full()
+            .min_w_0()
+            .gap_3()
+            .child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .whitespace_normal()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t.select_supported_desc),
+            )
+            .child(cards)
+            .child(
+                h_flex().child(
+                    Button::new("setup-switch-to-probe")
+                        .small()
+                        .outline()
+                        .icon(Icon::new(IconName::Usb))
+                        .label(t.unsupported_hw_tab)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.setup.hw_mode = SetupHardwareMode::UnsupportedProbe;
+                            this.refresh_setup_env_only();
+                            this.maybe_render_setup_3d();
+                            cx.notify();
+                        })),
+                ),
+            )
+    }
+
+    fn view_setup_unsupported_studio(&self, t: &'static UiText, cx: &mut Context<Self>) -> Div {
+        let model_label = if self.setup.model_name_hint.trim().is_empty() {
+            crate::kb_3d::generic::MODEL.label
+        } else {
+            self.setup.model_name_hint.trim()
+        };
+
+        let left_3d_panel = self.render_unsupported_stage_box("setup-stage", model_label, cx);
+
+        let mut right_probe_panel = v_flex()
+            .flex_1()
+            .min_w(px(320.0))
+            .overflow_hidden()
+            .gap_2p5()
+            .child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .whitespace_normal()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t.unsupported_desc),
+            )
+            .child(
+                v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap_1()
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .justify_between()
+                            .items_center()
+                            .gap_2()
+                            .child(div().text_xs().child(t.select_hid_label))
+                            .child(
+                                Button::new("setup-hid-rescan")
+                                    .xsmall()
+                                    .outline()
+                                    .icon(Icon::new(IconName::RefreshCw))
+                                    .label(t.refresh_checks)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.refresh_setup_checks(window, cx);
+                                    })),
+                            ),
+                    )
+                    .child(Select::new(&self.sel_setup_hid).small()),
+            )
+            .child(
+                v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap_1()
+                    .child(div().text_xs().child(t.model_hint_label))
+                    .child(Input::new(&self.input_setup_model_hint).small()),
+            )
+            .child(
+                Checkbox::new("setup-vendor-probe-chk")
+                    .checked(self.setup.probe_allow_vendor_queries)
+                    .label(t.vendor_probe_chk)
+                    .on_click(cx.listener(|this, next: &bool, _, cx| {
+                        this.setup.probe_allow_vendor_queries = *next;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .child(
+                        Button::new("setup-run-probe")
+                            .small()
+                            .primary()
+                            .icon(Icon::new(IconName::Cpu))
+                            .label(t.run_probe_btn)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.run_setup_probe(cx);
+                            })),
+                    ),
+            )
+            .child(Alert::info("setup-dev-followup", t.dev_followup_notice));
+
+        if let Some(err) = &self.setup.probe_error {
+            right_probe_panel =
+                right_probe_panel.child(Alert::error("setup-probe-err", err.clone()));
+        }
+
+        if let Some(report) = &self.setup.probe_report {
+            let caps = &report.inferred_capabilities;
+            let checks_pass = report
+                .checks
+                .iter()
+                .filter(|c| matches!(c.status, ProbeCheckStatus::Pass))
+                .count();
+            right_probe_panel = right_probe_panel
+                .child(render_metric_table(
+                    vec![
+                        MetricCell::text(
+                            "Interface",
+                            format!(
+                                "{} ({}:{})",
+                                report.selected_interface.hidraw_name,
+                                report.selected_interface.vid_hex,
+                                report.selected_interface.pid_hex
+                            ),
+                            cx,
+                        ),
+                        MetricCell::text(
+                            "Vendor Page",
+                            if caps.has_vendor_usage_page {
+                                "Yes"
+                            } else {
+                                "No"
+                            },
+                            cx,
+                        ),
+                        MetricCell::text(
+                            "64B Vendor Frame",
+                            if caps.has_64b_bidirectional_reports {
+                                "Yes"
+                            } else {
+                                "No"
+                            },
+                            cx,
+                        ),
+                        MetricCell::text(
+                            "Checks",
+                            format!("{checks_pass}/{} pass", report.checks.len()),
+                            cx,
+                        ),
+                    ],
+                    160.0,
+                    cx,
+                ))
+                .child(
+                    h_flex()
+                        .w_full()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_2()
+                        .child({
+                            let copied_view = cx.entity();
+                            Clipboard::new("setup-copy-probe-json")
+                                .small()
+                                .label(t.copy_json_btn)
+                                .value(self.setup.probe_json.clone())
+                                .on_copied(move |_, _, cx| {
+                                    copied_view.update(cx, |this, cx| {
+                                        this.status_line =
+                                            "Copied sanitized probe JSON to clipboard.".into();
+                                        cx.notify();
+                                    });
+                                })
+                        })
+                        .child(
+                            Button::new("setup-save-probe-json")
+                                .small()
+                                .outline()
+                                .icon(Icon::new(IconName::FolderDown))
+                                .label(t.save_json_btn)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.save_setup_probe_file(cx);
+                                })),
+                        )
+                        .child(
+                            Link::new("setup-open-unsupported-issue")
+                                .href(GH_UNSUPPORTED_ISSUE_URL)
+                                .child(
+                                    h_flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .text_xs()
+                                        .child(Icon::new(IconName::ExternalLink).xsmall())
+                                        .child(t.open_issue_btn),
+                                ),
+                        ),
+                );
+
+            if let Some(saved) = &self.setup.saved_probe_path {
+                right_probe_panel = right_probe_panel.child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .whitespace_normal()
+                        .text_xs()
+                        .text_color(cx.theme().success)
+                        .child(format!("Saved probe JSON: {saved}")),
+                );
+            }
+
+            let md_json: SharedString = format!("```json\n{}\n```", self.setup.probe_json).into();
+            right_probe_panel = right_probe_panel.child(
+                div()
+                    .id("setup-probe-json-scroll")
+                    .w_full()
+                    .min_w_0()
+                    .max_h(px(230.0))
+                    .overflow_y_scrollbar()
+                    .p_2()
+                    .rounded(cx.theme().radius)
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().background)
+                    .child(TextView::markdown("setup-probe-json-md", md_json).selectable(true)),
+            );
+        }
+
+        v_flex()
+            .w_full()
+            .min_w_0()
+            .gap_3()
+            .child(
+                Alert::warning("setup-fn-esc-recovery", t.recovery_warning_body)
+                    .title(t.recovery_warning_title),
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .flex_wrap()
+                    .items_start()
+                    .gap_3()
+                    .child(left_3d_panel)
+                    .child(right_probe_panel),
+            )
+    }
+
+    pub(crate) fn render_unsupported_stage_box(
+        &self,
+        id_prefix: &'static str,
+        model_label: &str,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let gpu_ready = self.renderer_3d.is_ok();
+        let use_2d = self.setup.unsupported_2d_view || !gpu_ready;
+
+        let toolbar = h_flex()
+            .w_full()
+            .min_w_0()
+            .flex_wrap()
+            .justify_between()
+            .items_center()
+            .gap_1p5()
+            .child(
+                h_flex()
+                    .gap_1()
+                    .child(setup_preset_btn(
+                        (id_prefix, 0),
+                        "Iso",
+                        CameraPreset::Perspective,
+                        self.setup.camera_preset,
+                        cx,
+                    ))
+                    .child(setup_preset_btn(
+                        (id_prefix, 1),
+                        "Top",
+                        CameraPreset::Top,
+                        self.setup.camera_preset,
+                        cx,
+                    ))
+                    .child(setup_preset_btn(
+                        (id_prefix, 2),
+                        "Side",
+                        CameraPreset::Side,
+                        self.setup.camera_preset,
+                        cx,
+                    ))
+                    .child(setup_preset_btn(
+                        (id_prefix, 3),
+                        "Front",
+                        CameraPreset::Front,
+                        self.setup.camera_preset,
+                        cx,
+                    )),
+            )
+            .child(
+                TabBar::new((id_prefix, 9usize))
+                    .segmented()
+                    .xsmall()
+                    .selected_index(usize::from(!use_2d))
+                    .on_click(cx.listener(|this, ix: &usize, _, cx| {
+                        this.setup.unsupported_2d_view = *ix == 0 || this.renderer_3d.is_err();
+                        if !this.setup.unsupported_2d_view {
+                            this.maybe_render_setup_3d();
+                        }
+                        cx.notify();
+                    }))
+                    .child(Tab::new().label("2D"))
+                    .child(Tab::new().label("3D")),
+            );
+
+        let stage = if !use_2d {
+            match (&self.renderer_3d, &self.preview_setup_3d_img) {
+                (Ok(_), Some(frame)) => v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div()
+                            .id((id_prefix, 20usize))
+                            .w_full()
+                            .max_w(px((KB3D_WIDTH as f32 * 0.68).min(566.0)))
+                            .h(px((KB3D_HEIGHT as f32 * 0.68).min(318.0)))
+                            .rounded(cx.theme().radius_lg)
+                            .overflow_hidden()
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .cursor_grab()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                                    this.dragging_setup_3d = true;
+                                    this.last_mouse_setup_3d =
+                                        Some((f32::from(ev.position.x), f32::from(ev.position.y)));
+                                    cx.notify();
+                                }),
+                            )
+                            .on_mouse_up(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, _| {
+                                    this.dragging_setup_3d = false;
+                                    this.last_mouse_setup_3d = None;
+                                }),
+                            )
+                            .on_mouse_up_out(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, _| {
+                                    this.dragging_setup_3d = false;
+                                    this.last_mouse_setup_3d = None;
+                                }),
+                            )
+                            .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| {
+                                if this.dragging_setup_3d && ev.dragging() {
+                                    let nx = f32::from(ev.position.x);
+                                    let ny = f32::from(ev.position.y);
+                                    if let Some((lx, ly)) = this.last_mouse_setup_3d {
+                                        this.setup.camera_3d.orbit(nx - lx, ny - ly);
+                                        this.setup.camera_preset = None;
+                                        this.maybe_render_setup_3d();
+                                    }
+                                    this.last_mouse_setup_3d = Some((nx, ny));
+                                    cx.notify();
+                                }
+                            }))
+                            .on_scroll(cx.listener(|this, ev: &ScrollEvent, _, cx| {
+                                let dy = match ev.delta {
+                                    ScrollDelta::Lines(p) => p.y * 0.45,
+                                    ScrollDelta::Pixels(p) => f32::from(p.y) * 0.01,
+                                };
+                                this.setup.camera_3d.adjust_zoom(-dy);
+                                this.setup.camera_preset = None;
+                                this.maybe_render_setup_3d();
+                                cx.stop_propagation();
+                                cx.notify();
+                            }))
+                            .child(
+                                img(frame.clone())
+                                    .w_full()
+                                    .h_full()
+                                    .object_fit(ObjectFit::Contain),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(format!(
+                                "Drag orbit · Wheel zoom · Generic 75% 3D model ({})",
+                                model_label
+                            )),
+                    ),
+                _ => v_flex().w_full().min_w_0().items_center().py_6().child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Rendering generic 3D prototype..."),
+                ),
+            }
+        } else {
+            let hc = HardwareColors::from_app(cx);
+            v_flex()
+                .w_full()
+                .min_w_0()
+                .child(render_unsupported_2d_canvas(model_label, &hc, 0.85))
+        };
+
+        v_flex()
+            .flex_1()
+            .min_w(px(320.0))
+            .overflow_hidden()
+            .gap_2()
+            .p_2p5()
+            .rounded(cx.theme().radius_lg)
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().group_box)
+            .child(toolbar)
+            .child(stage)
+    }
+
+    fn view_setup_step_finish(&self, t: &'static UiText, cx: &mut Context<Self>) -> Div {
+        let hint = self.input_setup_model_hint.read(cx).value().to_string();
+        let draft_entry = self.setup.build_profile_entry(&hint);
+        let theme_name = if cx.theme().is_dark() {
+            t.dark_mode_label
+        } else {
+            t.light_mode_label
+        };
+
+        let summary_table = render_metric_table(
+            vec![
+                MetricCell::text("Language", self.config.language.display_name(), cx),
+                MetricCell::text("Theme", theme_name, cx),
+                MetricCell::text(
+                    "Disclaimer",
+                    if self.setup.disclaimer_accepted {
+                        "Accepted"
+                    } else {
+                        "Pending"
+                    },
+                    cx,
+                ),
+                MetricCell::text(
+                    "Keyboard Profile",
+                    format!("{} ({})", draft_entry.label, draft_entry.model_id),
+                    cx,
+                ),
+                MetricCell::text(
+                    "Daemon IPC",
+                    if self.setup.env_status.daemon_connected {
+                        "Connected"
+                    } else {
+                        "Offline (Main Hub Still Available)"
+                    },
+                    cx,
+                ),
+            ],
+            220.0,
+            cx,
+        );
+
+        v_flex()
+            .w_full()
+            .min_w_0()
+            .child(
+                GroupBox::new()
+                    .outline()
+                    .title(t.summary_heading)
+                    .child(
+                        v_flex()
+                            .w_full()
+                            .min_w_0()
+                            .gap_3()
+                            .child(summary_table)
+                            .child(Alert::info("setup-finish-dev", t.dev_followup_notice))
+                            .child(
+                                h_flex()
+                                    .flex_wrap()
+                                    .gap_2()
+                                    .child(
+                                        Link::new("setup-finish-issue-link")
+                                            .href(GH_UNSUPPORTED_ISSUE_URL)
+                                            .child(
+                                                h_flex()
+                                                    .items_center()
+                                                    .gap_1()
+                                                    .text_xs()
+                                                    .child(Icon::new(IconName::ExternalLink).xsmall())
+                                                    .child(t.open_issue_btn),
+                                            ),
+                                    ),
+                            ),
+                    ),
+            )
+    }
+}
+
+fn setup_preset_btn(
+    id: (&'static str, usize),
+    label: &'static str,
+    preset: CameraPreset,
+    current: Option<CameraPreset>,
+    cx: &mut Context<ReaulaGui>,
+) -> Button {
+    Button::new(id)
+        .xsmall()
+        .selected(current == Some(preset))
+        .outline()
+        .label(label)
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.set_setup_camera_preset(preset, cx);
+        }))
+}
+
+fn status_pill(ok: bool, text: impl Into<SharedString>, cx: &gpui_kit::App) -> gpui_kit::AnyElement {
+    h_flex()
+        .min_w_0()
+        .items_center()
+        .gap_1p5()
+        .child(
+            div()
+                .w(px(7.0))
+                .h(px(7.0))
+                .flex_shrink_0()
+                .rounded(cx.theme().radius_full())
+                .bg(if ok {
+                    cx.theme().success
+                } else {
+                    cx.theme().warning
+                }),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .whitespace_normal()
+                .text_xs()
+                .child(text.into()),
+        )
+        .into_any_element()
+}
+
+fn copy_command_row(
+    id: &'static str,
+    title: &'static str,
+    cmd: &'static str,
+    cx: &gpui_kit::App,
+) -> Div {
+    h_flex()
+        .w_full()
+        .min_w_0()
+        .flex_wrap()
+        .justify_between()
+        .items_center()
+        .gap_2()
+        .p_2()
+        .rounded(cx.theme().radius)
+        .border_1()
+        .border_color(cx.theme().border)
+        .bg(cx.theme().background)
+        .child(
+            v_flex()
+                .flex_1()
+                .min_w(px(220.0))
+                .gap_0p5()
+                .child(div().text_xs().child(title))
+                .child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .whitespace_normal()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(cmd),
+                ),
+        )
+        .child(Clipboard::new(id).small().label("Copy").value(cmd))
+}

@@ -1,6 +1,8 @@
 //! Reaula WIN 60 HE desktop workbench built with GPUI Kit and wgpu.
 
+mod config;
 mod guide_window;
+mod i18n;
 mod kb_3d;
 mod state;
 mod theme;
@@ -35,19 +37,22 @@ use gpui_kit::{
 
 use reaula_core::audio_fx::{AudioEffectStyle, AudioPalette};
 use reaula_core::diagnostics::DiagnosticReport;
+use reaula_core::hid_probe::HidCandidateSummary;
 use reaula_core::ipc::VirtualKey;
 use reaula_core::keymap;
 use reaula_core::protocol::{
-    self, LIGHT_MAX_LEVEL, PollRate, TriggerConfig, TriggerMode, mm_to_raw,
+    self, LIGHT_MAX_LEVEL, LightState, PollRate, TriggerConfig, TriggerMode, mm_to_raw,
 };
 
+use config::{AppConfig, AppLanguage, ConfiguredKeyboardKind};
+use i18n::UiText;
 use kb_3d::{
-    CameraPreset, Kb3dCamera, Kb3dSceneInput, KeyboardRenderer3D, SwitchCamera, SwitchCameraPreset,
-    SwitchRenderer3D, SwitchSceneInput,
+    CameraPreset, Kb3dCamera, Kb3dSceneInput, KeyboardRenderer3D, MascotPose, SwitchCamera,
+    SwitchCameraPreset, SwitchRenderer3D, SwitchSceneInput,
 };
 use state::{
-    ConnectedState, KeymapCategory, LightViewMode, MascotKeySource, NavSection,
-    ShortcutActionPreset, SwitchViewMode, offline_diagnostic_report,
+    ConnectedState, KeymapCategory, LightViewMode, MascotKeySource, NavSection, SetupDraftState,
+    SetupHardwareMode, ShortcutActionPreset, SwitchViewMode, offline_diagnostic_report,
 };
 use views::lighting::{hsla_to_rgb_u8, rgb_u8_to_hsla};
 use widgets::SelectOption;
@@ -87,10 +92,15 @@ struct Args {
     /// Connect to a specific reaulad Unix domain socket
     #[arg(long)]
     socket: Option<PathBuf>,
+    /// Start on the Welcome & Hardware Setup wizard even after initial onboarding
+    #[arg(long)]
+    setup: bool,
 }
 
 pub(crate) struct ReaulaGui {
     pub(crate) socket: Option<PathBuf>,
+    pub(crate) config: AppConfig,
+    pub(crate) setup: SetupDraftState,
     pub(crate) nav: NavSection,
     pub(crate) sidebar_collapsed: bool,
     pub(crate) guide_window: Option<AnyWindowHandle>,
@@ -101,17 +111,22 @@ pub(crate) struct ReaulaGui {
 
     pub(crate) renderer_3d: Result<KeyboardRenderer3D, String>,
     pub(crate) preview_3d_img: Option<Arc<RenderImage>>,
+    pub(crate) preview_setup_3d_img: Option<Arc<RenderImage>>,
     pub(crate) switch_renderer_3d: Result<SwitchRenderer3D, String>,
     pub(crate) preview_switch_3d_img: Option<Arc<RenderImage>>,
     pub(crate) pending_drop_images: Vec<Arc<RenderImage>>,
     pub(crate) dirty_3d: bool,
     pub(crate) last_3d_render: Instant,
+    pub(crate) dirty_setup_3d: bool,
+    pub(crate) last_setup_3d_render: Instant,
     pub(crate) dirty_switch_3d: bool,
     pub(crate) last_switch_3d_render: Instant,
     pub(crate) last_hotkey_poll: Instant,
     pub(crate) last_dialog_tick: Instant,
     pub(crate) dragging_3d: bool,
     pub(crate) last_mouse_3d: Option<(f32, f32)>,
+    pub(crate) dragging_setup_3d: bool,
+    pub(crate) last_mouse_setup_3d: Option<(f32, f32)>,
     pub(crate) dragging_switch_3d: bool,
     pub(crate) last_mouse_switch_3d: Option<(f32, f32)>,
 
@@ -149,11 +164,21 @@ pub(crate) struct ReaulaGui {
     pub(crate) slider_hk_depth: Entity<SliderState>,
     pub(crate) input_hk_cmd: Entity<InputState>,
 
+    pub(crate) sel_setup_lang: Entity<SelectState<Vec<SelectOption<AppLanguage>>>>,
+    pub(crate) sel_setup_hid: Entity<SelectState<Vec<SelectOption<usize>>>>,
+    pub(crate) input_setup_model_hint: Entity<InputState>,
+
     pub(crate) _subscriptions: Vec<Subscription>,
 }
 
 impl ReaulaGui {
-    fn new(socket: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(
+        socket: Option<PathBuf>,
+        config: AppConfig,
+        force_setup: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let conn = ConnectedState::connect(socket.clone());
         let status_line = match &conn {
             Ok(s) => format!(
@@ -162,8 +187,41 @@ impl ReaulaGui {
             ),
             Err(e) => e.clone(),
         };
-        let initial_kb_id = conn.as_ref().ok().and_then(|s| s.keyboard_id());
-        let renderer_3d = KeyboardRenderer3D::new_for_keyboard(initial_kb_id);
+        let (daemon_pid, device_connected) = conn.as_ref().map_or((None, None), |s| {
+            (
+                Some(s.daemon_status.daemon_pid),
+                Some(s.daemon_status.device_connected),
+            )
+        });
+        let mut setup = SetupDraftState::new(
+            socket.as_deref(),
+            config.disclaimer_accepted,
+            daemon_pid,
+            device_connected,
+        );
+        if let Some(active) = config.active_keyboard() {
+            match active.kind {
+                ConfiguredKeyboardKind::Supported => {
+                    setup.hw_mode = SetupHardwareMode::Supported;
+                    setup.selected_supported_id = active.model_id.clone();
+                }
+                ConfiguredKeyboardKind::Unsupported => {
+                    setup.hw_mode = SetupHardwareMode::UnsupportedProbe;
+                    setup.model_name_hint = active.label.clone();
+                }
+            }
+        }
+        let initial_nav = if force_setup || !config.setup_completed {
+            NavSection::Setup
+        } else {
+            NavSection::Main
+        };
+
+        let initial_kb_id = config
+            .active_3d_model_id()
+            .map(str::to_string)
+            .or_else(|| conn.as_ref().ok().and_then(|s| s.keyboard_id()).map(str::to_string));
+        let renderer_3d = KeyboardRenderer3D::new_for_keyboard(initial_kb_id.as_deref());
         let switch_renderer_3d = match &renderer_3d {
             Ok(kb_r) => {
                 let (dev, q) = kb_r.shared_gpu();
@@ -437,6 +495,29 @@ impl ReaulaGui {
             InputState::new(window, cx)
                 .placeholder("Shell command, e.g. notify-send 'Hotkey triggered'")
                 .default_value(init_cmd)
+        });
+
+        let lang_items = AppLanguage::ALL
+            .into_iter()
+            .map(|l| SelectOption::new(l, l.display_name()))
+            .collect::<Vec<_>>();
+        let init_lang_ix = AppLanguage::ALL
+            .iter()
+            .position(|&l| l == config.language)
+            .map(|r| gpui_kit::component::IndexPath::default().row(r));
+        let sel_setup_lang = cx.new(|cx| SelectState::new(lang_items, init_lang_ix, window, cx));
+
+        let hid_items = build_setup_hid_vec(&setup.hid_candidates);
+        let init_hid_ix = setup
+            .selected_hid_idx
+            .map(|r| gpui_kit::component::IndexPath::default().row(r));
+        let sel_setup_hid = cx.new(|cx| SelectState::new(hid_items, init_hid_ix, window, cx));
+
+        let init_model_hint = setup.model_name_hint.clone();
+        let input_setup_model_hint = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("e.g. AULA F75, Hero 68 HE, F99 Pro")
+                .default_value(init_model_hint)
         });
 
         let mut subscriptions = Vec::new();
@@ -799,6 +880,43 @@ impl ReaulaGui {
                 }
             },
         ));
+        subscriptions.push(cx.subscribe_in(
+            &sel_setup_lang,
+            window,
+            |this, _, ev: &SelectEvent<Vec<SelectOption<AppLanguage>>>, window, cx| {
+                if let SelectEvent::Confirm(Some(lang)) = ev {
+                    this.set_language(*lang, window, cx);
+                }
+            },
+        ));
+        subscriptions.push(cx.subscribe_in(
+            &sel_setup_hid,
+            window,
+            |this, _, ev: &SelectEvent<Vec<SelectOption<usize>>>, window, cx| {
+                if let SelectEvent::Confirm(Some(ix)) = ev {
+                    this.setup.selected_hid_idx = Some(*ix);
+                    if let Some(cand) = this.setup.hid_candidates.get(*ix).cloned()
+                        && this.setup.model_name_hint.trim().is_empty()
+                        && !cand.product.trim().is_empty()
+                    {
+                        this.setup.model_name_hint = cand.product.clone();
+                        this.input_setup_model_hint
+                            .update(cx, |inp, cx| inp.set_value(cand.product, window, cx));
+                    }
+                    cx.notify();
+                }
+            },
+        ));
+        subscriptions.push(cx.subscribe_in(
+            &input_setup_model_hint,
+            window,
+            |this, input, ev: &InputEvent, _, cx| {
+                if let InputEvent::Change = ev {
+                    this.setup.model_name_hint = input.read(cx).value().to_string();
+                    cx.notify();
+                }
+            },
+        ));
 
         cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             loop {
@@ -847,10 +965,16 @@ impl ReaulaGui {
                             }
                         }
                     }
-                    if view.nav == NavSection::ColorLight && view.tick_color_light_stage() {
+                    if view.nav == NavSection::ColorLight
+                        && view.config.active_keyboard().is_none_or(|k| k.kind == ConfiguredKeyboardKind::Supported)
+                        && view.tick_color_light_stage()
+                    {
                         changed = true;
                     }
                     if view.nav == NavSection::Diagnostics && view.tick_diagnostics_stage() {
+                        changed = true;
+                    }
+                    if view.tick_setup_stage() {
                         changed = true;
                     }
                     if dialog_tick {
@@ -866,9 +990,11 @@ impl ReaulaGui {
         })
         .detach();
 
-        Self {
+        let mut app = Self {
             socket,
-            nav: NavSection::Main,
+            config,
+            setup,
+            nav: initial_nav,
             sidebar_collapsed: false,
             guide_window: None,
             conn,
@@ -877,17 +1003,22 @@ impl ReaulaGui {
             start_instant: Instant::now(),
             renderer_3d,
             preview_3d_img: None,
+            preview_setup_3d_img: None,
             switch_renderer_3d,
             preview_switch_3d_img: None,
             pending_drop_images: Vec::new(),
             dirty_3d: true,
             last_3d_render: Instant::now() - Duration::from_secs(1),
+            dirty_setup_3d: true,
+            last_setup_3d_render: Instant::now() - Duration::from_secs(1),
             dirty_switch_3d: true,
             last_switch_3d_render: Instant::now() - Duration::from_secs(1),
             last_hotkey_poll: Instant::now(),
             last_dialog_tick: Instant::now(),
             dragging_3d: false,
             last_mouse_3d: None,
+            dragging_setup_3d: false,
+            last_mouse_setup_3d: None,
             dragging_switch_3d: false,
             last_mouse_switch_3d: None,
             root_focus: cx.focus_handle(),
@@ -918,8 +1049,17 @@ impl ReaulaGui {
             sel_hk_vk,
             slider_hk_depth,
             input_hk_cmd,
+            sel_setup_lang,
+            sel_setup_hid,
+            input_setup_model_hint,
             _subscriptions: subscriptions,
+        };
+        if app.config.active_keyboard().is_some_and(|k| k.kind == ConfiguredKeyboardKind::Unsupported)
+            || (app.nav == NavSection::Setup && app.setup.hw_mode == SetupHardwareMode::UnsupportedProbe)
+        {
+            app.maybe_render_setup_3d();
         }
+        app
     }
 
     pub(crate) fn sync_main_controls_from_state(
@@ -1194,7 +1334,21 @@ impl ReaulaGui {
             let _ = state.start_travel();
         }
         self.nav = next;
-        if next == NavSection::ColorLight
+        if next == NavSection::Setup {
+            self.refresh_setup_env_only();
+            if self.setup.hw_mode == SetupHardwareMode::UnsupportedProbe {
+                self.dirty_setup_3d = true;
+                self.maybe_render_setup_3d();
+            }
+        } else if (next == NavSection::Main || next == NavSection::ColorLight)
+            && self
+                .config
+                .active_keyboard()
+                .is_some_and(|k| k.kind == ConfiguredKeyboardKind::Unsupported)
+        {
+            self.dirty_setup_3d = true;
+            self.maybe_render_setup_3d();
+        } else if next == NavSection::ColorLight
             && self
                 .conn
                 .as_ref()
@@ -1212,6 +1366,277 @@ impl ReaulaGui {
             self.maybe_render_switch_3d();
         }
         cx.notify();
+    }
+
+    pub(crate) fn text(&self) -> &'static UiText {
+        UiText::for_lang(self.config.language)
+    }
+
+    pub(crate) fn persist_config(&mut self) {
+        if let Err(err) = config::save_app_config(&self.config) {
+            self.status_line = format!("Config save warning: {err}");
+        }
+    }
+
+    pub(crate) fn set_language(
+        &mut self,
+        lang: AppLanguage,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.config.language = lang;
+        gpui_kit::component::set_locale(lang.gpui_locale());
+        self.persist_config();
+        self.status_line = format!("Language: {}", lang.display_name());
+        cx.notify();
+    }
+
+    pub(crate) fn set_theme_dark(&mut self, dark: bool, cx: &mut Context<Self>) {
+        let mode = if dark {
+            ThemeMode::Dark
+        } else {
+            ThemeMode::Light
+        };
+        theme::apply_clinical_theme(mode, cx);
+        self.config.theme_dark = dark;
+        self.persist_config();
+        self.status_line = format!("Theme: {}", if dark { "Dark" } else { "Light" });
+        cx.notify();
+    }
+
+    pub(crate) fn refresh_setup_env_only(&mut self) {
+        let (daemon_pid, device_connected) = self.conn.as_ref().map_or((None, None), |s| {
+            (
+                Some(s.daemon_status.daemon_pid),
+                Some(s.daemon_status.device_connected),
+            )
+        });
+        self.setup
+            .refresh_env_and_hid(self.socket.as_deref(), daemon_pid, device_connected);
+    }
+
+    pub(crate) fn refresh_setup_checks(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.refresh_setup_env_only();
+        let items = build_setup_hid_vec(&self.setup.hid_candidates);
+        let ix = self.setup.selected_hid_idx;
+        self.sel_setup_hid.update(cx, |s, cx| {
+            s.set_items(items, window, cx);
+            if let Some(row) = ix {
+                s.set_selected_value(&row, window, cx);
+            }
+        });
+        self.status_line = format!(
+            "Checked environment: {}, {} HID interface(s) enumerated.",
+            self.setup.env_status.hidraw_summary,
+            self.setup.hid_candidates.len()
+        );
+        cx.notify();
+    }
+
+    pub(crate) fn open_setup_at_step(
+        &mut self,
+        step: usize,
+        hw_mode: Option<SetupHardwareMode>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.setup.step = step.min(4);
+        if let Some(mode) = hw_mode {
+            self.setup.hw_mode = mode;
+        }
+        self.refresh_setup_checks(window, cx);
+        self.nav = NavSection::Setup;
+        if self.setup.hw_mode == SetupHardwareMode::UnsupportedProbe {
+            self.dirty_setup_3d = true;
+            self.maybe_render_setup_3d();
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn run_setup_probe(&mut self, cx: &mut Context<Self>) {
+        let hint = self.input_setup_model_hint.read(cx).value().to_string();
+        match self.setup.run_selected_hid_probe(&hint) {
+            Ok(msg) => self.status_line = msg,
+            Err(err) => self.status_line = err,
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn save_setup_probe_file(&mut self, cx: &mut Context<Self>) {
+        if self.setup.probe_json.is_empty() {
+            self.status_line = "Run capability probe before saving JSON.".into();
+            cx.notify();
+            return;
+        }
+        let hint = self.input_setup_model_hint.read(cx).value().to_string();
+        let label = if hint.trim().is_empty() {
+            self.setup
+                .probe_report
+                .as_ref()
+                .map_or("unsupported-keyboard", |r| r.selected_interface.hidraw_name.as_str())
+        } else {
+            hint.trim()
+        };
+        match config::save_probe_json_file(label, &self.setup.probe_json) {
+            Ok(path) => {
+                let p = path.display().to_string();
+                self.status_line = format!("Saved probe JSON -> {p}");
+                self.setup.saved_probe_path = Some(p);
+            }
+            Err(err) => self.status_line = format!("Save probe JSON failed: {err}"),
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn commit_setup_and_open_main(&mut self, cx: &mut Context<Self>) {
+        if !self.setup.disclaimer_accepted {
+            self.status_line = self.text().disclaimer_must_accept.into();
+            self.setup.step = 1;
+            cx.notify();
+            return;
+        }
+        let hint = self.input_setup_model_hint.read(cx).value().to_string();
+        let entry = self.setup.build_profile_entry(&hint);
+        let label = entry.label.clone();
+        self.config.disclaimer_accepted = true;
+        self.config.setup_completed = true;
+        self.config.upsert_keyboard(entry);
+        self.persist_config();
+        self.nav = NavSection::Main;
+        if self
+            .config
+            .active_keyboard()
+            .is_some_and(|k| k.kind == ConfiguredKeyboardKind::Unsupported)
+        {
+            self.dirty_setup_3d = true;
+            self.maybe_render_setup_3d();
+        } else {
+            self.dirty_3d = true;
+            self.maybe_render_3d();
+        }
+        self.status_line = format!("Active keyboard: {label}");
+        cx.notify();
+    }
+
+    pub(crate) fn activate_saved_keyboard(&mut self, id: &str, cx: &mut Context<Self>) {
+        if !self.config.activate_keyboard(id) {
+            return;
+        }
+        let is_unsup = self
+            .config
+            .active_keyboard()
+            .is_some_and(|k| k.kind == ConfiguredKeyboardKind::Unsupported);
+        let label = self
+            .config
+            .active_keyboard()
+            .map_or_else(|| id.to_string(), |k| k.label.clone());
+        self.persist_config();
+        if is_unsup {
+            self.dirty_setup_3d = true;
+            self.maybe_render_setup_3d();
+        } else {
+            self.dirty_3d = true;
+            self.maybe_render_3d();
+        }
+        self.status_line = format!("Switched active keyboard -> {label}");
+        cx.notify();
+    }
+
+    pub(crate) fn remove_saved_keyboard(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.config.remove_keyboard(id) {
+            self.persist_config();
+            if self
+                .config
+                .active_keyboard()
+                .is_some_and(|k| k.kind == ConfiguredKeyboardKind::Unsupported)
+            {
+                self.dirty_setup_3d = true;
+                self.maybe_render_setup_3d();
+            } else {
+                self.dirty_3d = true;
+            }
+            self.status_line = "Removed keyboard profile.".into();
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn set_setup_camera_preset(
+        &mut self,
+        preset: CameraPreset,
+        cx: &mut Context<Self>,
+    ) {
+        self.setup.camera_3d = kb_3d::generic::preset_camera(preset);
+        self.setup.camera_preset = Some(preset);
+        self.dirty_setup_3d = true;
+        self.maybe_render_setup_3d();
+        cx.notify();
+    }
+
+    pub(crate) fn tick_setup_stage(&mut self) -> bool {
+        if self.setup.unsupported_2d_view || self.renderer_3d.is_err() {
+            return false;
+        }
+        let showing_setup_3d = self.nav == NavSection::Setup
+            && self.setup.hw_mode == SetupHardwareMode::UnsupportedProbe;
+        let showing_unsup_hub = (self.nav == NavSection::Main || self.nav == NavSection::ColorLight)
+            && self
+                .config
+                .active_keyboard()
+                .is_some_and(|k| k.kind == ConfiguredKeyboardKind::Unsupported);
+        if !(showing_setup_3d || showing_unsup_hub) {
+            return false;
+        }
+        let anim_due = self.last_setup_3d_render.elapsed() >= Duration::from_millis(33);
+        let init_needed = self.preview_setup_3d_img.is_none();
+        if !(self.dirty_setup_3d || anim_due || init_needed) {
+            return false;
+        }
+        self.maybe_render_setup_3d()
+    }
+
+    pub(crate) fn maybe_render_setup_3d(&mut self) -> bool {
+        let Ok(renderer) = &mut self.renderer_3d else {
+            return false;
+        };
+        let _ = renderer.set_model(Some(kb_3d::generic::MODEL.id));
+        let light = LightState {
+            mode: 7,
+            brightness: 3,
+            speed: 2,
+            full_color: true,
+            power_on: true,
+            fg: [0, 215, 255],
+            bg: [12, 18, 28],
+            ..Default::default()
+        };
+        let depths = [0.0f32; reaula_core::protocol::MATRIX_SLOTS];
+        let sel = std::collections::BTreeSet::new();
+        let empty = std::collections::BTreeSet::new();
+        let now = Instant::now();
+        let scene = Kb3dSceneInput {
+            light: &light,
+            custom_colors: None,
+            use_custom_colors: false,
+            typing_only: false,
+            impulses: &[],
+            selected_keys: &sel,
+            focused_key: None,
+            live_depths_mm: &depths,
+            time_s: self.start_instant.elapsed().as_secs_f32(),
+            miku: MascotPose::default(),
+            teto: MascotPose::default(),
+            daemon_aqua_keys: &empty,
+            daemon_aqua_pulsing: &empty,
+        };
+        if let Ok(next_img) = renderer.render_frame(&self.setup.camera_3d, &scene) {
+            if let Some(old) = self.preview_setup_3d_img.replace(next_img) {
+                self.pending_drop_images.push(old);
+            }
+            self.dirty_setup_3d = false;
+            self.last_setup_3d_render = now;
+            return true;
+        }
+        false
     }
 
     pub(crate) fn set_camera_preset(&mut self, preset: CameraPreset, cx: &mut Context<Self>) {
@@ -1268,13 +1693,7 @@ impl ReaulaGui {
     }
 
     fn toggle_theme(&mut self, cx: &mut Context<Self>) {
-        let next = if cx.theme().is_dark() {
-            ThemeMode::Light
-        } else {
-            ThemeMode::Dark
-        };
-        theme::apply_clinical_theme(next, cx);
-        cx.notify();
+        self.set_theme_dark(!cx.theme().is_dark(), cx);
     }
 
     pub(crate) fn apply_actuation(&mut self, cx: &mut Context<Self>) {
@@ -1597,6 +2016,11 @@ impl ReaulaGui {
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = self.text();
+        let active_kb_label = self
+            .config
+            .active_keyboard()
+            .map(|k| k.label.clone());
         let (conn_ok, daemon_info, travel_on, model_name) = match &self.conn {
             Ok(st) => (
                 true,
@@ -1605,9 +2029,14 @@ impl ReaulaGui {
                     st.poll_rate_khz, st.daemon_status.daemon_pid
                 ),
                 st.travel_enabled,
-                st.model_label().to_string(),
+                active_kb_label.unwrap_or_else(|| st.model_label().to_string()),
             ),
-            Err(_) => (false, "Offline".into(), false, "AULA WIN 60 HE".to_string()),
+            Err(_) => (
+                false,
+                t.daemon_offline.into(),
+                false,
+                active_kb_label.unwrap_or_else(|| "AULA WIN 60 HE".to_string()),
+            ),
         };
         let collapsed = self.sidebar_collapsed;
 
@@ -1666,7 +2095,7 @@ impl ReaulaGui {
         });
 
         let menu = SidebarMenu::new().children(NavSection::ALL.into_iter().map(|sec| {
-            SidebarMenuItem::new(sec.label())
+            SidebarMenuItem::new(t.nav_label(sec))
                 .icon(sec.icon())
                 .active(self.nav == sec)
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -1711,7 +2140,7 @@ impl ReaulaGui {
                             .w_full()
                             .justify_between()
                             .items_center()
-                            .child(div().text_xs().child("Live Travel"))
+                            .child(div().text_xs().child(t.live_travel))
                             .child(
                                 Switch::new("sb-travel-sw")
                                     .small()
@@ -1730,7 +2159,7 @@ impl ReaulaGui {
                                     .outline()
                                     .flex_1()
                                     .icon(Icon::new(IconName::RotateCcw))
-                                    .label("Zero")
+                                    .label(t.zero_btn)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         if let Ok(st) = &mut this.conn {
                                             st.clear_stuck_travel();
@@ -1746,7 +2175,7 @@ impl ReaulaGui {
                                     .outline()
                                     .flex_1()
                                     .icon(Icon::new(IconName::RefreshCw))
-                                    .label("Reconnect")
+                                    .label(t.reconnect_btn)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.reconnect(window, cx);
                                     })),
@@ -1771,26 +2200,35 @@ impl Render for ReaulaGui {
             let _ = window.drop_image(dead);
         }
 
+        let t = self.text();
         let is_dark = cx.theme().is_dark();
-        let (conn_ok, hw_badge) = match &self.conn {
-            Ok(s) => (
-                s.daemon_status.device_connected,
-                format!(
-                    "{} · {} · {:.2} mm",
-                    if s.daemon_status.device_connected {
-                        "ONLINE"
-                    } else {
-                        "WAITING USB"
-                    },
-                    s.probe
-                        .firmware_string
-                        .as_deref()
-                        .and_then(|f| f.rsplit_once(",SI,").map(|(_, t)| t))
-                        .unwrap_or("HID"),
-                    s.max_mm
+        let active_unsup = self
+            .config
+            .active_keyboard()
+            .filter(|k| k.kind == ConfiguredKeyboardKind::Unsupported);
+        let (conn_ok, hw_badge) = if let Some(kb) = active_unsup {
+            (true, format!("{} · Generic 3D Probe", kb.label))
+        } else {
+            match &self.conn {
+                Ok(s) => (
+                    s.daemon_status.device_connected,
+                    format!(
+                        "{} · {} · {:.2} mm",
+                        if s.daemon_status.device_connected {
+                            "ONLINE"
+                        } else {
+                            "WAITING USB"
+                        },
+                        s.probe
+                            .firmware_string
+                            .as_deref()
+                            .and_then(|f| f.rsplit_once(",SI,").map(|(_, t)| t))
+                            .unwrap_or("HID"),
+                        s.max_mm
+                    ),
                 ),
-            ),
-            Err(_) => (false, "Daemon Offline".into()),
+                Err(_) => (false, t.daemon_offline.into()),
+            }
         };
 
         let top_header = h_flex()
@@ -1810,7 +2248,7 @@ impl Render for ReaulaGui {
                     .items_center()
                     .gap_2()
                     .child(Icon::new(self.nav.icon()))
-                    .child(div().min_w_0().truncate().text_sm().child(self.nav.label())),
+                    .child(div().min_w_0().truncate().text_sm().child(t.nav_label(self.nav))),
             )
             .child(
                 h_flex()
@@ -1873,7 +2311,7 @@ impl Render for ReaulaGui {
                             .xsmall()
                             .outline()
                             .icon(Icon::new(IconName::BookOpen))
-                            .label("Guide & Help…")
+                            .label(t.guide_help_btn)
                             .tooltip("Open reference window (F1)")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.open_guide(cx);
@@ -2003,6 +2441,17 @@ fn build_vk_vec(cat: KeymapCategory) -> Vec<SelectOption<VirtualKey>> {
         .collect()
 }
 
+pub(crate) fn build_setup_hid_vec(cands: &[HidCandidateSummary]) -> Vec<SelectOption<usize>> {
+    if cands.is_empty() {
+        return vec![SelectOption::new(0, "No /dev/hidraw* devices found")];
+    }
+    cands
+        .iter()
+        .enumerate()
+        .map(|(ix, c)| SelectOption::new(ix, c.display_label()))
+        .collect()
+}
+
 pub(crate) fn sanitize_command_paste(text: &str) -> String {
     text.chars()
         .filter(|&c| c != '\r' && c != '\n' && !c.is_control())
@@ -2012,26 +2461,37 @@ pub(crate) fn sanitize_command_paste(text: &str) -> String {
 fn main() {
     let args = Args::parse();
     let socket = args.socket;
+    let force_setup = args.setup;
+    let config = config::load_app_config();
 
     gpui_kit::application()
         .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx: &mut App| {
             gpui_kit::init(cx);
-            theme::apply_clinical_theme(ThemeMode::Dark, cx);
+            gpui_kit::component::set_locale(config.language.gpui_locale());
+            let theme_mode = if config.theme_dark {
+                ThemeMode::Dark
+            } else {
+                ThemeMode::Light
+            };
+            theme::apply_clinical_theme(theme_mode, cx);
 
             let bounds = Bounds::centered(None, size(px(1340.0), px(860.0)), cx);
+            let cfg_clone = config.clone();
             let (_win, entity) = gpui_kit::open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     ..Default::default()
                 },
                 cx,
-                move |window, cx| cx.new(|cx| ReaulaGui::new(socket, window, cx)),
+                move |window, cx| {
+                    cx.new(|cx| ReaulaGui::new(socket, cfg_clone, force_setup, window, cx))
+                },
             )
             .expect("failed to open window");
 
             let _ = _win.update(cx, |_, window, cx| {
-                window.set_window_title("Reaula - WIN 60 HE Workbench");
+                window.set_window_title("Reaula - Keyboard Configuration & HID Probe Workbench");
                 let focus = entity.read(cx).root_focus.clone();
                 focus.focus(window, cx);
             });

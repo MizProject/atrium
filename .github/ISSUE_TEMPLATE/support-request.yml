@@ -1,0 +1,48 @@
+name: Support Request / Bug Report
+description: Report a bug, permissions/daemon problem, UI issue, or request general support for ReAULA.
+title: "[Support]: "
+labels:
+  - support
+body:
+  - type: markdown
+    attributes:
+      value: |
+        MizProject does not collect secret information from users. Please avoid attaching private credentials, home paths with sensitive usernames, or unrelated logs.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: ReAULA Component
+      options:
+        - GUI (reaula-gui)
+        - Daemon (reaulad / systemd)
+        - CLI (reaula)
+        - Calibration / Actuation / Rapid Trigger
+        - Lighting / Audio Sync
+        - TUI (Experimental)
+        - Permissions / udev
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Keyboard Model & Linux Environment
+      placeholder: e.g. AULA WIN 60 HE, Arch Linux, Wayland/KDE, kernel 6.12
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened & steps to reproduce
+      placeholder: Describe the issue and exact steps to reproduce it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics Output (`reaula doctor` or GUI Diagnostics summary)
+      description: Paste diagnostic output if applicable (remove any personal info before pasting).
+      render: text

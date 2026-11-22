@@ -1244,6 +1244,109 @@ fn linear_to_srgb_u8(c: f32) -> u8 {
     (srgb * 255.0).round().clamp(0.0, 255.0) as u8
 }
 
+/// 2D anatomical schematic fallback for the generic 75% unsupported keyboard rendition.
+pub fn render_unsupported_2d_canvas(
+    model_label: &str,
+    hc: &HardwareColors,
+    scale: f32,
+) -> AnyElement {
+    const GENERIC_2D_W: f32 = 625.0;
+    const GENERIC_2D_H: f32 = 255.0;
+    let board_w = GENERIC_2D_W * scale + 28.0;
+    let board_h = GENERIC_2D_H * scale + 36.0;
+
+    let mut canvas = div()
+        .relative()
+        .mt(px(10.0))
+        .w(px(board_w))
+        .h(px(board_h))
+        .flex_shrink_0()
+        .rounded_xl()
+        .bg(rgb(hc.deck_bg))
+        .border_1()
+        .border_color(rgb(hc.deck_border))
+        .child(
+            div()
+                .absolute()
+                .left(px(14.0 + 52.0 * scale))
+                .top(px(-9.0))
+                .w(px(26.0))
+                .h(px(9.0))
+                .rounded_t_sm()
+                .bg(rgb(hc.key_selected_bg))
+                .border_1()
+                .border_color(rgb(hc.deck_border)),
+        )
+        .child(
+            div()
+                .absolute()
+                .left(px(14.0))
+                .top(px(4.0))
+                .text_xs()
+                .text_color(rgb(hc.key_sub_ink))
+                .child(format!("2D PROTOTYPE · {model_label}")),
+        );
+
+    for k in kb_3d::generic::GENERIC_KEYS {
+        let x = 14.0 + (k.x as f32) * scale;
+        let y = 24.0 + (k.y as f32) * scale;
+        let w = (k.width as f32) * scale;
+        let h = (k.height as f32) * scale;
+        let is_accent = matches!(k.name, "Esc" | "Enter");
+
+        let key = div()
+            .id(("gen-2d-key", usize::from(k.index)))
+            .absolute()
+            .left(px(x))
+            .top(px(y))
+            .w(px(w))
+            .h(px(h))
+            .rounded_md()
+            .overflow_hidden()
+            .bg(rgb(if is_accent {
+                hc.dm_active
+            } else {
+                hc.key_bg
+            }))
+            .border_1()
+            .border_color(rgb(if is_accent {
+                hc.dm_border
+            } else {
+                hc.key_border
+            }))
+            .flex()
+            .flex_col()
+            .justify_between()
+            .p(px(2.0))
+            .child(
+                div()
+                    .w_full()
+                    .truncate()
+                    .text_color(rgb(if is_accent { hc.dm_ink } else { hc.key_ink }))
+                    .text_size(px(10.0))
+                    .child(k.name),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .truncate()
+                    .text_size(px(8.0))
+                    .text_color(rgb(hc.key_dim_ink))
+                    .child(format!("#{}", k.index)),
+            );
+        canvas = canvas.child(key);
+    }
+
+    div()
+        .id("unsupported-2d-scroll")
+        .w_full()
+        .min_w_0()
+        .overflow_x_scrollbar()
+        .pb_1()
+        .child(canvas)
+        .into_any_element()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

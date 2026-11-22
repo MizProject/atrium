@@ -1,0 +1,66 @@
+name: Unsupported AULA Keyboard Support Request
+description: Submit your HID capability probe JSON from ReAULA Setup to request support for your keyboard.
+title: "[Keyboard Support]: "
+labels:
+  - hardware-support
+  - triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for helping expand **ReAULA** hardware support!
+
+        - **Privacy**: ReAULA's probe JSON only collects USB descriptors, capability flags, and protocol check results. Serial numbers, usernames, hostnames, and secrets are omitted.
+        - **Developer follow-up**: The developer may reply to your issue with follow-up questions or a test build. Please check back and respond promptly so your AULA keyboard can be supported quickly!
+        - **Recovery tip**: If your keyboard acted weird during probing, unplug and replug it, then try resetting if possible by holding **Fn + Esc for 10 seconds**.
+
+  - type: input
+    id: keyboard_model
+    attributes:
+      label: Exact AULA Keyboard Model & Layout
+      description: "Example: AULA F75 (75%), AULA HERO 68 HE, AULA WIN 68 HE, etc."
+      placeholder: e.g. AULA WIN 68 HE (Wired / 2.4GHz)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: connection_mode
+    attributes:
+      label: Connection Mode Used During Probing
+      options:
+        - Wired USB-C
+        - 2.4GHz Wireless Dongle
+        - Tested Both Wired & 2.4GHz
+    validations:
+      required: true
+
+  - type: textarea
+    id: probe_json
+    attributes:
+      label: Probe JSON Output (from ReAULA Setup -> Hardware & Probe)
+      description: Paste the full JSON exported from ReAULA's Unsupported Keyboard Prober.
+      render: json
+      placeholder: |
+        {
+          "schema_version": 1,
+          ...
+        }
+    validations:
+      required: true
+
+  - type: textarea
+    id: probe_notes
+    attributes:
+      label: Probing Observations / Quirks / OS Environment
+      description: Optional notes (e.g., whether Fn+Esc reset was needed, distro, kernel version, switch type).
+      placeholder: e.g. Active probe timed out on interface 1, no LEDs flickered. Fedora 41 / Arch Linux.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Submission Checklist
+      options:
+        - label: I reviewed the JSON and confirmed no personal or secret information is included.
+          required: true
+        - label: I understand the developer may ask follow-up questions on this issue and will try to reply back quickly so support can be added.
+          required: true

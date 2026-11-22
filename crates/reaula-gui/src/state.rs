@@ -1,12 +1,20 @@
 //! Application state, daemon IPC wrappers, background streams, and diagnostic telemetry for `reaula-gui`.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::path::PathBuf;
+use std::fs::OpenOptions;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
+
+use crate::config::{ConfiguredKeyboardKind, KeyboardProfileEntry, now_unix_ms};
+use reaula_core::hid_probe::{
+    self, HidCandidateSummary, UnknownKeyboardProbeReport, UnknownProbeOptions,
+};
+use reaula_core::hid_sysfs::enumerate_sysfs_hidraw;
+use reaula_core::keyboards;
 
 #[cfg(target_os = "linux")]
 use reaula_core::alsa;
@@ -34,6 +42,7 @@ pub const MAX_FEEDBACK_EVENTS: usize = 24;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum NavSection {
+    Setup,
     Main,
     Calibration,
     ColorLight,
@@ -42,7 +51,8 @@ pub enum NavSection {
 }
 
 impl NavSection {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
+        Self::Setup,
         Self::Main,
         Self::Calibration,
         Self::ColorLight,
@@ -50,18 +60,9 @@ impl NavSection {
         Self::Diagnostics,
     ];
 
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Main => "Main",
-            Self::Calibration => "Calibration",
-            Self::ColorLight => "Color & Light",
-            Self::Hotkeys => "Keymaps",
-            Self::Diagnostics => "Diagnostics",
-        }
-    }
-
     pub fn icon(self) -> gpui_kit::assets::IconName {
         match self {
+            Self::Setup => gpui_kit::assets::IconName::Wrench,
             Self::Main => gpui_kit::assets::IconName::Keyboard,
             Self::Calibration => gpui_kit::assets::IconName::SlidersHorizontal,
             Self::ColorLight => gpui_kit::assets::IconName::Palette,
@@ -69,6 +70,302 @@ impl NavSection {
             Self::Diagnostics => gpui_kit::assets::IconName::Activity,
         }
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SetupHardwareMode {
+    Supported,
+    UnsupportedProbe,
+}
+
+#[derive(Clone, Debug)]
+pub struct SetupEnvironmentStatus {
+    pub hidraw_rw_ok: usize,
+    pub hidraw_summary: String,
+    pub udev_rule_present: bool,
+    pub udev_rule_path: String,
+    pub uinput_ok: bool,
+    pub uinput_detail: String,
+    pub uinput_remedy: Option<String>,
+    pub daemon_connected: bool,
+    pub daemon_detail: String,
+    pub discovered_supported: Vec<(String, String, bool)>,
+}
+
+pub fn collect_setup_env_checks(
+    explicit_socket: Option<&Path>,
+    daemon_pid: Option<u32>,
+    device_connected: Option<bool>,
+) -> SetupEnvironmentStatus {
+    let all_hid = enumerate_sysfs_hidraw(None);
+    let hidraw_nodes_found = all_hid.len();
+    let hidraw_rw_ok = all_hid.iter().filter(|d| d.readable_writable).count();
+    let hidraw_summary = if hidraw_nodes_found == 0 {
+        "No /dev/hidraw* nodes detected".into()
+    } else {
+        format!("{hidraw_rw_ok}/{hidraw_nodes_found} hidraw node(s) R/W accessible")
+    };
+
+    let udev_candidates = [
+        "/etc/udev/rules.d/99-aula-win60he.rules",
+        "/usr/lib/udev/rules.d/99-aula-win60he.rules",
+        "/lib/udev/rules.d/99-aula-win60he.rules",
+    ];
+    let found_udev = udev_candidates
+        .iter()
+        .find(|p| Path::new(p).exists())
+        .copied();
+    let udev_rule_present = found_udev.is_some();
+    let udev_rule_path = found_udev
+        .unwrap_or("/etc/udev/rules.d/99-aula-win60he.rules")
+        .to_string();
+
+    let (uinput_ok, uinput_detail, uinput_remedy) =
+        match OpenOptions::new().read(true).write(true).open("/dev/uinput") {
+            Ok(_) => (
+                true,
+                "/dev/uinput open for user-space key injection".into(),
+                None,
+            ),
+            Err(err) => {
+                let (detail, remedy) = diagnostics::diagnose_uinput_open_error(&err);
+                (false, detail, Some(remedy))
+            }
+        };
+
+    let sock_path = reaula_core::ipc::discover_client_socket_path(explicit_socket);
+    let (daemon_connected, daemon_detail) = if let Some(pid) = daemon_pid {
+        let hw = match device_connected {
+            Some(true) => "hardware USB attached",
+            Some(false) => "waiting for hardware USB",
+            None => "IPC ready",
+        };
+        (true, format!("Connected to reaulad (pid {pid}, {hw})"))
+    } else {
+        (
+            false,
+            format!("reaulad offline at {}", sock_path.display()),
+        )
+    };
+
+    let discovered_supported = keyboards::discover_connected()
+        .into_iter()
+        .map(|d| {
+            (
+                d.spec.id.to_string(),
+                format!(
+                    "{} ({:04X}:{:04X})",
+                    d.spec.display_name, d.usb_id.vid, d.usb_id.pid
+                ),
+                d.vendor_readable_writable,
+            )
+        })
+        .collect();
+
+    SetupEnvironmentStatus {
+        hidraw_rw_ok,
+        hidraw_summary,
+        udev_rule_present,
+        udev_rule_path,
+        uinput_ok,
+        uinput_detail,
+        uinput_remedy,
+        daemon_connected,
+        daemon_detail,
+        discovered_supported,
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SetupDraftState {
+    pub step: usize,
+    pub disclaimer_accepted: bool,
+    pub hw_mode: SetupHardwareMode,
+    pub selected_supported_id: String,
+    pub unsupported_2d_view: bool,
+    pub hid_candidates: Vec<HidCandidateSummary>,
+    pub selected_hid_idx: Option<usize>,
+    pub probe_allow_vendor_queries: bool,
+    pub model_name_hint: String,
+    pub probe_report: Option<UnknownKeyboardProbeReport>,
+    pub probe_json: String,
+    pub probe_error: Option<String>,
+    pub saved_probe_path: Option<String>,
+    pub env_status: SetupEnvironmentStatus,
+    pub camera_3d: Kb3dCamera,
+    pub camera_preset: Option<CameraPreset>,
+}
+
+impl SetupDraftState {
+    pub fn new(
+        explicit_socket: Option<&Path>,
+        disclaimer_accepted: bool,
+        daemon_pid: Option<u32>,
+        device_connected: Option<bool>,
+    ) -> Self {
+        let env_status =
+            collect_setup_env_checks(explicit_socket, daemon_pid, device_connected);
+        let hid_candidates = hid_probe::enumerate_hid_candidates();
+        let selected_hid_idx = pick_default_hid_candidate(&hid_candidates);
+        Self {
+            step: 0,
+            disclaimer_accepted,
+            hw_mode: SetupHardwareMode::Supported,
+            selected_supported_id: keyboards::win60he::SPEC.id.to_string(),
+            unsupported_2d_view: false,
+            hid_candidates,
+            selected_hid_idx,
+            probe_allow_vendor_queries: false,
+            model_name_hint: String::new(),
+            probe_report: None,
+            probe_json: String::new(),
+            probe_error: None,
+            saved_probe_path: None,
+            env_status,
+            camera_3d: crate::kb_3d::generic::MODEL.default_camera,
+            camera_preset: Some(CameraPreset::Perspective),
+        }
+    }
+
+    pub fn refresh_env_and_hid(
+        &mut self,
+        explicit_socket: Option<&Path>,
+        daemon_pid: Option<u32>,
+        device_connected: Option<bool>,
+    ) {
+        let prev_name = self
+            .selected_candidate()
+            .map(|c| c.hidraw_name.clone());
+        self.env_status =
+            collect_setup_env_checks(explicit_socket, daemon_pid, device_connected);
+        self.hid_candidates = hid_probe::enumerate_hid_candidates();
+        self.selected_hid_idx = prev_name
+            .and_then(|name| self.hid_candidates.iter().position(|c| c.hidraw_name == name))
+            .or_else(|| pick_default_hid_candidate(&self.hid_candidates));
+    }
+
+    pub fn selected_candidate(&self) -> Option<&HidCandidateSummary> {
+        self.selected_hid_idx
+            .and_then(|ix| self.hid_candidates.get(ix))
+    }
+
+    pub fn run_selected_hid_probe(&mut self, model_hint: &str) -> Result<String, String> {
+        let Some(cand) = self.selected_candidate().cloned() else {
+            let msg = "Select a target /dev/hidraw* device first.".to_string();
+            self.probe_error = Some(msg.clone());
+            return Err(msg);
+        };
+        let hint = if model_hint.trim().is_empty() {
+            cand.product.clone()
+        } else {
+            model_hint.trim().to_string()
+        };
+        self.model_name_hint = hint.clone();
+        let opts = UnknownProbeOptions {
+            model_hint: hint,
+            allow_active_read_queries: self.probe_allow_vendor_queries,
+        };
+        match hid_probe::probe_unknown_hid_device(&cand.dev_path, &opts) {
+            Ok(report) => {
+                let json = report
+                    .to_pretty_json()
+                    .map_err(|e| format!("Failed to format probe JSON: {e}"))?;
+                let msg = format!(
+                    "Probed {} ({}:{}) -- {} check(s) recorded.",
+                    report.selected_interface.hidraw_name,
+                    report.selected_interface.vid_hex,
+                    report.selected_interface.pid_hex,
+                    report.checks.len(),
+                );
+                self.probe_report = Some(report);
+                self.probe_json = json;
+                self.probe_error = None;
+                self.saved_probe_path = None;
+                Ok(msg)
+            }
+            Err(err) => {
+                self.probe_error = Some(err.clone());
+                Err(err)
+            }
+        }
+    }
+
+    pub fn build_profile_entry(&self, model_hint_override: &str) -> KeyboardProfileEntry {
+        match self.hw_mode {
+            SetupHardwareMode::Supported => {
+                let spec = keyboards::find_by_id(&self.selected_supported_id)
+                    .unwrap_or(&keyboards::win60he::SPEC);
+                let usb = spec.primary_usb_id();
+                KeyboardProfileEntry {
+                    id: spec.id.to_string(),
+                    label: spec.display_name.to_string(),
+                    kind: ConfiguredKeyboardKind::Supported,
+                    model_id: spec.id.to_string(),
+                    vendor_id: Some(usb.vid),
+                    product_id: Some(usb.pid),
+                    hid_summary: Some(format!("USB {:04X}:{:04X}", usb.vid, usb.pid)),
+                    notes: None,
+                    added_unix_ms: now_unix_ms(),
+                }
+            }
+            SetupHardwareMode::UnsupportedProbe => {
+                let cand = self.selected_candidate();
+                let hint = model_hint_override.trim();
+                let label = if !hint.is_empty() {
+                    hint.to_string()
+                } else if let Some(c) = cand.filter(|c| !c.product.is_empty()) {
+                    c.product.clone()
+                } else if let Some(c) = cand {
+                    format!("Unsupported Keyboard ({}:{})", c.vid_hex, c.pid_hex)
+                } else {
+                    "Unsupported AULA Keyboard".to_string()
+                };
+                let slug: String = label
+                    .chars()
+                    .map(|ch| {
+                        if ch.is_ascii_alphanumeric() {
+                            ch.to_ascii_lowercase()
+                        } else {
+                            '-'
+                        }
+                    })
+                    .collect();
+                let slug = slug.trim_matches('-');
+                let suffix = cand.map_or_else(
+                    || format!("{}", now_unix_ms() % 10000),
+                    |c| format!("{:04x}-{:04x}", c.vid, c.pid),
+                );
+                KeyboardProfileEntry {
+                    id: if slug.is_empty() {
+                        format!("unsupported-{suffix}")
+                    } else {
+                        format!("unsupported-{slug}-{suffix}")
+                    },
+                    label,
+                    kind: ConfiguredKeyboardKind::Unsupported,
+                    model_id: crate::kb_3d::generic::MODEL.id.to_string(),
+                    vendor_id: cand.map(|c| c.vid),
+                    product_id: cand.map(|c| c.pid),
+                    hid_summary: cand.map(HidCandidateSummary::display_label),
+                    notes: Some("3D generic layout preview; HID capability probe profile".into()),
+                    added_unix_ms: now_unix_ms(),
+                }
+            }
+        }
+    }
+}
+
+fn pick_default_hid_candidate(cands: &[HidCandidateSummary]) -> Option<usize> {
+    if cands.is_empty() {
+        return None;
+    }
+    // Prefer vendor usage pages (>= 0xFF00) on non-boot devices first, then any R/W node.
+    cands
+        .iter()
+        .position(|c| c.usage_page.is_some_and(|up| up >= 0xFF00) && c.readable_writable)
+        .or_else(|| cands.iter().position(|c| c.usage_page.is_some_and(|up| up >= 0xFF00)))
+        .or_else(|| cands.iter().position(|c| c.readable_writable))
+        .or(Some(0))
 }
 
 #[derive(Clone, Debug)]

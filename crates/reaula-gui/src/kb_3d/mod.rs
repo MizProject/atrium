@@ -6,6 +6,7 @@
 //!
 //! Models are grouped under `kb_3d/<model>.rs` and indexed in [`MODELS`].
 
+pub mod generic;
 pub mod mascots;
 pub mod switch;
 pub mod win60he;
@@ -65,6 +66,8 @@ impl Kb3dCamera {
     pub fn from_preset_for(model: &KeyboardModel3d, preset: CameraPreset) -> Self {
         if model.id == win60he::MODEL.id {
             win60he::preset_camera(preset)
+        } else if model.id == generic::MODEL.id {
+            generic::preset_camera(preset)
         } else {
             match preset {
                 CameraPreset::Perspective => model.default_camera,
@@ -132,19 +135,29 @@ pub struct Kb3dSceneInput<'a> {
 #[derive(Clone, Copy)]
 pub struct KeyboardModel3d {
     pub id: &'static str,
-    pub spec: &'static KeyboardSpec,
+    pub label: &'static str,
+    pub spec: Option<&'static KeyboardSpec>,
     pub keys: &'static [KeyDef],
     pub default_camera: Kb3dCamera,
     pub build_mesh: fn(&mut Vec<Vertex>, &mut Vec<u32>),
 }
 
 /// Indexed 3D keyboard models compiled into `reaula-gui`.
-pub const MODELS: &[KeyboardModel3d] = &[win60he::MODEL];
+pub const MODELS: &[KeyboardModel3d] = &[win60he::MODEL, generic::MODEL];
 
-/// Look up a registered 3D keyboard model by ID or alias, defaulting to the WIN 60 HE.
+/// Look up a registered 3D keyboard model by ID or alias.
+/// Returns `win60he::MODEL` when `id` is `None` or empty, and `generic::MODEL`
+/// for unrecognized or unsupported keyboard identifiers.
 pub fn find_model(id: Option<&str>) -> &'static KeyboardModel3d {
-    id.and_then(|tok| MODELS.iter().find(|m| m.spec.matches_id(tok)))
-        .unwrap_or(&MODELS[0])
+    let Some(tok) = id.map(str::trim).filter(|s| !s.is_empty()) else {
+        return &MODELS[0];
+    };
+    MODELS
+        .iter()
+        .find(|m| {
+            m.id.eq_ignore_ascii_case(tok) || m.spec.is_some_and(|spec| spec.matches_id(tok))
+        })
+        .unwrap_or(&generic::MODEL)
 }
 
 #[repr(C)]
@@ -1849,6 +1862,62 @@ mod tests {
                 scale: 1.0,
                 age_s: 0.4,
             },
+            daemon_aqua_keys: &empty,
+            daemon_aqua_pulsing: &empty,
+        };
+        let frame = renderer.render_frame(&cam, &scene).unwrap();
+        let bytes = frame.as_bytes(0).unwrap();
+        assert_eq!(bytes.len(), (KB3D_WIDTH * KB3D_HEIGHT * 4) as usize);
+        assert!(bytes.iter().any(|&b| b != 0));
+    }
+
+    #[test]
+    fn generic_unsupported_model_builds_and_renders_offscreen() {
+        let gen_explicit = find_model(Some("generic-unsupported"));
+        assert_eq!(gen_explicit.id, "generic-unsupported");
+        assert!(gen_explicit.spec.is_none());
+
+        let gen_unknown = find_model(Some("aula-f75-unknown"));
+        assert_eq!(gen_unknown.id, "generic-unsupported");
+
+        let (verts, idx) = build_scene_mesh(gen_unknown);
+        assert!(verts.len() > 2000);
+        assert_eq!(idx.len() % 3, 0);
+
+        let renderer = match KeyboardRenderer3D::new_for_keyboard(Some("generic-unsupported")) {
+            Ok(r) => r,
+            Err(err) => {
+                assert!(
+                    !err.contains("validation"),
+                    "wgpu generic shader/pipeline validation failed: {err}"
+                );
+                return;
+            }
+        };
+        let cam = Kb3dCamera::from_preset_for(gen_unknown, CameraPreset::Perspective);
+        let light = LightState {
+            mode: 7,
+            brightness: 3,
+            speed: 2,
+            full_color: true,
+            power_on: true,
+            ..Default::default()
+        };
+        let depths = [0.0f32; MATRIX_SLOTS];
+        let sel = BTreeSet::new();
+        let empty = BTreeSet::new();
+        let scene = Kb3dSceneInput {
+            light: &light,
+            custom_colors: None,
+            use_custom_colors: false,
+            typing_only: false,
+            impulses: &[],
+            selected_keys: &sel,
+            focused_key: None,
+            live_depths_mm: &depths,
+            time_s: 0.4,
+            miku: MascotPose::default(),
+            teto: MascotPose::default(),
             daemon_aqua_keys: &empty,
             daemon_aqua_pulsing: &empty,
         };

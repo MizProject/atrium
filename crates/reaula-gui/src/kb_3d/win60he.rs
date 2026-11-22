@@ -14,7 +14,8 @@ const BOARD_CZ: f32 = KEYBOARD_CANVAS_HEIGHT as f32 * 0.5 + 5.0;
 
 pub const MODEL: KeyboardModel3d = KeyboardModel3d {
     id: win60he::SPEC.id,
-    spec: &win60he::SPEC,
+    label: win60he::SPEC.display_name,
+    spec: Some(&win60he::SPEC),
     keys: &WIN60HE_KEYS,
     default_camera: Kb3dCamera {
         yaw: -0.34,

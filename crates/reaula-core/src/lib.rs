@@ -2,6 +2,7 @@
 pub mod alsa;
 pub mod audio_fx;
 pub mod diagnostics;
+pub mod hid_probe;
 pub mod hid_sysfs;
 pub mod ipc;
 pub mod keyboards;

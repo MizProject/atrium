@@ -1,24 +1,353 @@
 //! Main workspace: identity strip, 61-key travel matrix, and 3-column workbench.
 
 use gpui_kit::assets::IconName;
+use gpui_kit::base::Selectable as _;
+use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants as _};
+use gpui_kit::component::link::Link;
 use gpui_kit::component::slider::Slider;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{Context, Div, IntoElement as _, ParentElement as _, Styled as _, div, px};
 
+use reaula_core::hid_probe::{DEVELOPER_NOTICE, RECOVERY_NOTICE};
 use reaula_core::keymap;
 use reaula_core::protocol::TriggerMode;
 
 use crate::ReaulaGui;
-use crate::state::{ConnectedState, NavSection};
+use crate::config::{ConfiguredKeyboardKind, KeyboardProfileEntry};
+use crate::state::{ConnectedState, NavSection, SetupHardwareMode};
 use crate::widgets::{
     KB_SCALE_DEFAULT, KeyboardCanvasMode, MetricCell, SWITCH_OPTIONS, render_metric_table,
 };
 
 impl ReaulaGui {
+    pub(crate) fn view_main_hub(&self, cx: &mut Context<Self>) -> Div {
+        let t = self.text();
+        let active_kb = self.config.active_keyboard().cloned();
+
+        let mut cards = h_flex().w_full().min_w_0().flex_wrap().gap_2p5();
+        if self.config.keyboards.is_empty() {
+            cards = cards.child(
+                v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap_2()
+                    .p_3()
+                    .rounded(cx.theme().radius)
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().background)
+                    .child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .whitespace_normal()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t.no_keyboards_empty),
+                    )
+                    .child(
+                        h_flex()
+                            .flex_wrap()
+                            .gap_2()
+                            .child(
+                                Button::new("hub-empty-add")
+                                    .xsmall()
+                                    .primary()
+                                    .icon(Icon::new(IconName::Plus))
+                                    .label(t.add_keyboard_btn)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_setup_at_step(3, None, window, cx);
+                                    })),
+                            ),
+                    ),
+            );
+        } else {
+            for (ix, kb) in self.config.keyboards.iter().enumerate() {
+                let is_active = active_kb.as_ref().is_some_and(|a| a.id == kb.id);
+                let kb_id_activate = kb.id.clone();
+                let kb_id_remove = kb.id.clone();
+                let kind_label = match kb.kind {
+                    ConfiguredKeyboardKind::Supported => t.supported_badge,
+                    ConfiguredKeyboardKind::Unsupported => t.unsupported_badge,
+                };
+                let vid_pid = match (kb.vendor_id, kb.product_id) {
+                    (Some(v), Some(p)) => format!("{v:04X}:{p:04X}"),
+                    _ => kb.model_id.clone(),
+                };
+
+                cards = cards.child(
+                    v_flex()
+                        .min_w(px(250.0))
+                        .flex_1()
+                        .overflow_hidden()
+                        .gap_2()
+                        .p_2p5()
+                        .rounded(cx.theme().radius)
+                        .border_1()
+                        .border_color(if is_active {
+                            cx.theme().primary
+                        } else {
+                            cx.theme().border
+                        })
+                        .bg(cx.theme().background)
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .min_w_0()
+                                .justify_between()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    h_flex()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .items_center()
+                                        .gap_1p5()
+                                        .child(
+                                            div()
+                                                .w(px(7.0))
+                                                .h(px(7.0))
+                                                .flex_shrink_0()
+                                                .rounded(cx.theme().radius_full())
+                                                .bg(if is_active {
+                                                    cx.theme().success
+                                                } else {
+                                                    cx.theme().muted_foreground
+                                                }),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .truncate()
+                                                .text_xs()
+                                                .child(kb.label.clone()),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .px_1p5()
+                                        .py_0p5()
+                                        .rounded(cx.theme().radius)
+                                        .border_1()
+                                        .border_color(cx.theme().border)
+                                        .text_xs()
+                                        .text_color(if kb.kind == ConfiguredKeyboardKind::Supported {
+                                            cx.theme().info
+                                        } else {
+                                            cx.theme().warning
+                                        })
+                                        .child(kind_label),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .truncate()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(format!(
+                                    "{} · {}",
+                                    vid_pid,
+                                    kb.hid_summary.as_deref().unwrap_or(&kb.model_id)
+                                )),
+                        )
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .justify_between()
+                                .items_center()
+                                .gap_1p5()
+                                .child(
+                                    Button::new(("hub-kb-activate", ix))
+                                        .xsmall()
+                                        .selected(is_active)
+                                        .outline()
+                                        .label(if is_active {
+                                            t.active_badge
+                                        } else {
+                                            t.activate_btn
+                                        })
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.activate_saved_keyboard(&kb_id_activate, cx);
+                                        })),
+                                )
+                                .child(
+                                    Button::new(("hub-kb-remove", ix))
+                                        .xsmall()
+                                        .ghost()
+                                        .icon(Icon::new(IconName::Trash))
+                                        .label(t.remove_btn)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.remove_saved_keyboard(&kb_id_remove, cx);
+                                        })),
+                                ),
+                        ),
+                );
+            }
+        }
+
+        let deck = GroupBox::new()
+            .outline()
+            .title(t.my_keyboards_title)
+            .child(
+                v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap_2p5()
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .flex_wrap()
+                            .justify_between()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .child(
+                                        Button::new("hub-add-keyboard")
+                                            .xsmall()
+                                            .primary()
+                                            .icon(Icon::new(IconName::Plus))
+                                            .label(t.add_keyboard_btn)
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.open_setup_at_step(3, None, window, cx);
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new("hub-open-setup")
+                                            .xsmall()
+                                            .outline()
+                                            .icon(Icon::new(IconName::Wrench))
+                                            .label(t.setup_wizard_btn)
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.open_setup_at_step(0, None, window, cx);
+                                            })),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(format!(
+                                        "{} profile(s)",
+                                        self.config.keyboards.len()
+                                    )),
+                            ),
+                    )
+                    .child(cards),
+            );
+
+        let body = if let Some(kb) = active_kb.filter(|k| k.kind == ConfiguredKeyboardKind::Unsupported) {
+            self.view_unsupported_board_panel(&kb, cx).into_any_element()
+        } else {
+            match &self.conn {
+                Ok(state) => self.view_main(state, cx).into_any_element(),
+                Err(err) => self.view_disconnected(err, cx),
+            }
+        };
+
+        v_flex()
+            .w_full()
+            .min_w_0()
+            .gap_3()
+            .child(deck.w_full().min_w_0().overflow_hidden())
+            .child(body)
+    }
+
+    pub(crate) fn view_unsupported_board_panel(
+        &self,
+        kb: &KeyboardProfileEntry,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let t = self.text();
+        let stage = self.render_unsupported_stage_box("hub-unsup", &kb.label, cx);
+
+        let info_panel = GroupBox::new()
+            .outline()
+            .title(format!("Unsupported Keyboard · {}", kb.label))
+            .child(
+                v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap_2p5()
+                    .child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .whitespace_normal()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(
+                                kb.hid_summary
+                                    .as_deref()
+                                    .unwrap_or("Generic 75% 3D representation active for unsupported HID hardware.")
+                                    .to_string(),
+                            ),
+                    )
+                    .child(
+                        Alert::warning("hub-recovery-warn", RECOVERY_NOTICE)
+                            .title(t.recovery_warning_title),
+                    )
+                    .child(Alert::info("hub-dev-reply-note", DEVELOPER_NOTICE))
+                    .child(
+                        h_flex()
+                            .flex_wrap()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                Button::new("hub-reprobe-btn")
+                                    .small()
+                                    .primary()
+                                    .icon(Icon::new(IconName::Cpu))
+                                    .label("Probe HID / Export JSON\u{2026}")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_setup_at_step(
+                                            3,
+                                            Some(SetupHardwareMode::UnsupportedProbe),
+                                            window,
+                                            cx,
+                                        );
+                                    })),
+                            )
+                            .child(
+                                Link::new("hub-gh-issue")
+                                    .href("https://github.com/MizProject/reaula/issues/new?template=unsupported-keyboard-support.yml")
+                                    .child(
+                                        h_flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .text_xs()
+                                            .child(Icon::new(IconName::ExternalLink).xsmall())
+                                            .child(t.open_issue_btn),
+                                    ),
+                            ),
+                    ),
+            );
+
+        h_flex()
+            .w_full()
+            .min_w_0()
+            .flex_wrap()
+            .items_start()
+            .gap_3()
+            .child(stage)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(320.0))
+                    .overflow_hidden()
+                    .child(info_panel.w_full().min_w_0().overflow_hidden()),
+            )
+    }
+
     pub(crate) fn view_main(&self, state: &ConnectedState, cx: &mut Context<Self>) -> Div {
         let fw = state.probe.firmware_string.as_deref().unwrap_or("Unknown");
         let range = state.probe.max_travel.map_or_else(
