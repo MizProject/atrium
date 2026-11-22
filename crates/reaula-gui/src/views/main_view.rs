@@ -209,28 +209,14 @@ impl ReaulaGui {
                             .items_center()
                             .gap_2()
                             .child(
-                                h_flex()
-                                    .gap_2()
-                                    .child(
-                                        Button::new("hub-add-keyboard")
-                                            .xsmall()
-                                            .primary()
-                                            .icon(Icon::new(IconName::Plus))
-                                            .label(t.add_keyboard_btn)
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.open_setup_at_step(3, None, window, cx);
-                                            })),
-                                    )
-                                    .child(
-                                        Button::new("hub-open-setup")
-                                            .xsmall()
-                                            .outline()
-                                            .icon(Icon::new(IconName::Wrench))
-                                            .label(t.setup_wizard_btn)
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.open_setup_at_step(0, None, window, cx);
-                                            })),
-                                    ),
+                                Button::new("hub-add-keyboard")
+                                    .xsmall()
+                                    .primary()
+                                    .icon(Icon::new(IconName::Plus))
+                                    .label(t.add_keyboard_btn)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_setup_at_step(3, None, window, cx);
+                                    })),
                             )
                             .child(
                                 div()

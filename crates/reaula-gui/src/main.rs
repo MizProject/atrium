@@ -179,7 +179,15 @@ impl ReaulaGui {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let conn = ConnectedState::connect(socket.clone());
+        let mut conn = ConnectedState::connect(socket.clone());
+        if let Ok(st) = &mut conn {
+            if config.prefer_2d_stage {
+                st.light_view_mode = LightViewMode::TwoD;
+            }
+            if !config.auto_live_travel && st.travel_enabled {
+                st.stop_travel();
+            }
+        }
         let status_line = match &conn {
             Ok(s) => format!(
                 "Connected to reaulad (uid={}, pid={})",
@@ -199,6 +207,7 @@ impl ReaulaGui {
             daemon_pid,
             device_connected,
         );
+        setup.unsupported_2d_view = config.prefer_2d_stage;
         if let Some(active) = config.active_keyboard() {
             match active.kind {
                 ConfiguredKeyboardKind::Supported => {
@@ -1340,6 +1349,8 @@ impl ReaulaGui {
                 self.dirty_setup_3d = true;
                 self.maybe_render_setup_3d();
             }
+        } else if next == NavSection::Settings {
+            self.refresh_setup_env_only();
         } else if (next == NavSection::Main || next == NavSection::ColorLight)
             && self
                 .config
@@ -1401,6 +1412,68 @@ impl ReaulaGui {
         self.config.theme_dark = dark;
         self.persist_config();
         self.status_line = format!("Theme: {}", if dark { "Dark" } else { "Light" });
+        cx.notify();
+    }
+
+    pub(crate) fn set_prefer_2d_stage(&mut self, prefer_2d: bool, cx: &mut Context<Self>) {
+        self.config.prefer_2d_stage = prefer_2d;
+        self.setup.unsupported_2d_view = prefer_2d || self.renderer_3d.is_err();
+        if let Ok(st) = &mut self.conn {
+            st.light_view_mode = if prefer_2d || self.renderer_3d.is_err() {
+                LightViewMode::TwoD
+            } else {
+                LightViewMode::ThreeD
+            };
+        }
+        self.persist_config();
+        self.status_line = if prefer_2d {
+            "Default hardware stage: 2D blueprint.".into()
+        } else {
+            "Default hardware stage: 3D GPU preview.".into()
+        };
+        cx.notify();
+    }
+
+    pub(crate) fn set_auto_live_travel(&mut self, auto: bool, cx: &mut Context<Self>) {
+        self.config.auto_live_travel = auto;
+        if let Ok(st) = &mut self.conn {
+            if auto && !st.travel_enabled && !st.cal_active {
+                let _ = st.start_travel();
+            } else if !auto && st.travel_enabled {
+                st.stop_travel();
+            }
+        }
+        self.persist_config();
+        self.status_line = if auto {
+            "Auto-start live key travel enabled.".into()
+        } else {
+            "Auto-start live key travel disabled.".into()
+        };
+        cx.notify();
+    }
+
+    pub(crate) fn reset_app_preferences(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.config.reset_preferences();
+        gpui_kit::component::set_locale(self.config.language.gpui_locale());
+        theme::apply_clinical_theme(ThemeMode::Dark, cx);
+        self.setup.unsupported_2d_view = false;
+        let lang = self.config.language;
+        self.sel_setup_lang
+            .update(cx, |s, cx| s.set_selected_value(&lang, window, cx));
+        if let Ok(st) = &mut self.conn {
+            if self.renderer_3d.is_ok() {
+                st.light_view_mode = LightViewMode::ThreeD;
+            }
+            if !st.travel_enabled && !st.cal_active {
+                let _ = st.start_travel();
+            }
+        }
+        self.persist_config();
+        self.status_line = "Reset language, theme, and workbench preferences to defaults.".into();
         cx.notify();
     }
 
@@ -1653,6 +1726,14 @@ impl ReaulaGui {
 
     fn reconnect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.conn = ConnectedState::connect(self.socket.clone());
+        if let Ok(st) = &mut self.conn {
+            if self.config.prefer_2d_stage {
+                st.light_view_mode = LightViewMode::TwoD;
+            }
+            if !self.config.auto_live_travel && st.travel_enabled {
+                st.stop_travel();
+            }
+        }
         self.offline_diag = None;
         self.dirty_3d = true;
         self.status_line = match &self.conn {

@@ -143,6 +143,48 @@ impl UnknownKeyboardProbeReport {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HidrawPermissionCommands {
+    pub hidraw_name: String,
+    pub udev_rule_filename: String,
+    pub udev_rule_line: String,
+    pub install_udev_cmd: String,
+    pub temp_setfacl_cmd: String,
+}
+
+/// Build safe, VID:PID-scoped `udev` and temporary user-ACL (`setfacl`) commands
+/// for granting `/dev/hidraw*` read/write access on unsupported keyboards.
+pub fn permission_commands_for(cand: &HidCandidateSummary) -> HidrawPermissionCommands {
+    let safe_node: String = cand
+        .hidraw_name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .collect();
+    let hidraw_name = if safe_node.starts_with("hidraw") {
+        safe_node
+    } else {
+        "hidraw0".to_string()
+    };
+    let vid = format!("{:04x}", cand.vid);
+    let pid = format!("{:04x}", cand.pid);
+    let udev_rule_filename = format!("99-aula-probe-{vid}-{pid}.rules");
+    let udev_rule_line = format!(
+        r#"SUBSYSTEM=="hidraw", ATTRS{{idVendor}}=="{vid}", ATTRS{{idProduct}}=="{pid}", MODE="0660", TAG+="uaccess""#
+    );
+    let install_udev_cmd = format!(
+        "echo '{}' | sudo tee /etc/udev/rules.d/{} > /dev/null && sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=hidraw",
+        udev_rule_line, udev_rule_filename
+    );
+    let temp_setfacl_cmd = format!("sudo setfacl -m u:$USER:rw /dev/{hidraw_name}");
+    HidrawPermissionCommands {
+        hidraw_name,
+        udev_rule_filename,
+        udev_rule_line,
+        install_udev_cmd,
+        temp_setfacl_cmd,
+    }
+}
+
 /// Enumerate all connected HID interfaces without exposing user secrets or serial numbers.
 pub fn enumerate_hid_candidates() -> Vec<HidCandidateSummary> {
     let sysfs = enumerate_sysfs_hidraw(None);
@@ -307,6 +349,7 @@ pub fn probe_unknown_hid_device(
         raw_hex: None,
     });
 
+    let perm_cmds = permission_commands_for(&selected);
     checks.push(ProbeCapabilityCheck {
         stage: "sysfs".into(),
         name: "Userspace R/W Permission".into(),
@@ -319,9 +362,11 @@ pub fn probe_unknown_hid_device(
             format!("{} is readable and writable by this process.", selected.hidraw_name)
         } else {
             format!(
-                "{} is blocked ({}). Install udev rule or grant temporary access for active probing.",
+                "{} is blocked ({}). Passive descriptor reads work; for active queries run `{}` (or temporary `{}`), then Refresh.",
                 selected.hidraw_name,
-                selected.permission_error.as_deref().unwrap_or("permission denied")
+                selected.permission_error.as_deref().unwrap_or("permission denied"),
+                perm_cmds.install_udev_cmd,
+                perm_cmds.temp_setfacl_cmd,
             )
         },
         raw_hex: None,
@@ -338,7 +383,12 @@ pub fn probe_unknown_hid_device(
                 stage: "active_vendor_read".into(),
                 name: "Read-only vendor queries (0x01/0x0D/0x07/0x21)".into(),
                 status: ProbeCheckStatus::Skipped,
-                summary: "Skipped active queries because current user lacks read/write permission on this hidraw node.".into(),
+                summary: format!(
+                    "Skipped active queries because {} lacks R/W permission. Apply `{}` or `{}` then click Refresh.",
+                    selected.hidraw_name,
+                    perm_cmds.install_udev_cmd,
+                    perm_cmds.temp_setfacl_cmd,
+                ),
                 raw_hex: None,
             });
         } else if !has_vendor_up && !has_64b {
@@ -740,5 +790,43 @@ mod tests {
     #[test]
     fn enumerate_hid_candidates_runs_without_panicking() {
         let _ = enumerate_hid_candidates();
+    }
+
+    #[test]
+    fn permission_commands_scope_uaccess_to_vid_pid_and_sanitize_node() {
+        let cand = HidCandidateSummary {
+            hidraw_name: "../evil;rm".into(),
+            dev_path: "/dev/hidraw9".into(),
+            vid: 0x258A,
+            pid: 0x010C,
+            vid_hex: "258A".into(),
+            pid_hex: "010C".into(),
+            manufacturer: String::new(),
+            product: "AULA F75".into(),
+            sysfs_name: String::new(),
+            interface_number: Some(1),
+            kernel_driver: "hid-generic".into(),
+            usage_page: Some(0xFF00),
+            usage_page_hex: Some("0xFF00".into()),
+            usage: Some(0x01),
+            usage_hex: Some("0x01".into()),
+            report_ids: vec![],
+            input_bytes: Some(64),
+            output_bytes: Some(64),
+            feature_bytes: None,
+            report_descriptor_len: 0,
+            readable_writable: false,
+            permission_error: Some("Permission denied".into()),
+            known_supported_id: None,
+            known_supported_name: None,
+        };
+        let cmds = permission_commands_for(&cand);
+        assert_eq!(cmds.hidraw_name, "hidraw0");
+        assert_eq!(cmds.udev_rule_filename, "99-aula-probe-258a-010c.rules");
+        assert!(cmds.udev_rule_line.contains("ATTRS{idVendor}==\"258a\""));
+        assert!(cmds.udev_rule_line.contains("ATTRS{idProduct}==\"010c\""));
+        assert!(cmds.udev_rule_line.contains("TAG+=\"uaccess\""));
+        assert!(!cmds.install_udev_cmd.contains("0666"));
+        assert_eq!(cmds.temp_setfacl_cmd, "sudo setfacl -m u:$USER:rw /dev/hidraw0");
     }
 }

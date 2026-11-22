@@ -48,16 +48,17 @@ pub enum NavSection {
     ColorLight,
     Hotkeys,
     Diagnostics,
+    Settings,
 }
 
 impl NavSection {
     pub const ALL: [Self; 6] = [
-        Self::Setup,
         Self::Main,
         Self::Calibration,
         Self::ColorLight,
         Self::Hotkeys,
         Self::Diagnostics,
+        Self::Settings,
     ];
 
     pub fn icon(self) -> gpui_kit::assets::IconName {
@@ -68,6 +69,7 @@ impl NavSection {
             Self::ColorLight => gpui_kit::assets::IconName::Palette,
             Self::Hotkeys => gpui_kit::assets::IconName::Zap,
             Self::Diagnostics => gpui_kit::assets::IconName::Activity,
+            Self::Settings => gpui_kit::assets::IconName::Settings,
         }
     }
 }

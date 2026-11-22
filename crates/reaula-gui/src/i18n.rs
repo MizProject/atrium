@@ -10,6 +10,7 @@ pub struct UiText {
     pub nav_color_light: &'static str,
     pub nav_hotkeys: &'static str,
     pub nav_diagnostics: &'static str,
+    pub nav_settings: &'static str,
 
     pub guide_help_btn: &'static str,
     pub live_travel: &'static str,
@@ -66,13 +67,22 @@ pub struct UiText {
 
     pub my_keyboards_title: &'static str,
     pub add_keyboard_btn: &'static str,
-    pub setup_wizard_btn: &'static str,
     pub activate_btn: &'static str,
     pub active_badge: &'static str,
     pub remove_btn: &'static str,
     pub supported_badge: &'static str,
     pub unsupported_badge: &'static str,
     pub no_keyboards_empty: &'static str,
+
+    pub settings_subtitle: &'static str,
+    pub settings_workbench_heading: &'static str,
+    pub settings_prefer_2d_label: &'static str,
+    pub settings_auto_travel_label: &'static str,
+    pub settings_hid_perms_heading: &'static str,
+    pub settings_hid_perms_desc: &'static str,
+    pub settings_open_setup_btn: &'static str,
+    pub settings_reset_prefs_btn: &'static str,
+    pub settings_about_heading: &'static str,
 }
 
 impl UiText {
@@ -94,6 +104,7 @@ impl UiText {
             NavSection::ColorLight => self.nav_color_light,
             NavSection::Hotkeys => self.nav_hotkeys,
             NavSection::Diagnostics => self.nav_diagnostics,
+            NavSection::Settings => self.nav_settings,
         }
     }
 }
@@ -105,6 +116,7 @@ const TEXT_EN: UiText = UiText {
     nav_color_light: "Color & Light",
     nav_hotkeys: "Hotkeys",
     nav_diagnostics: "Diagnostics",
+    nav_settings: "Settings",
 
     guide_help_btn: "Guide & Help\u{2026}",
     live_travel: "Live Travel",
@@ -161,13 +173,22 @@ const TEXT_EN: UiText = UiText {
 
     my_keyboards_title: "My Keyboards",
     add_keyboard_btn: "Add Keyboard\u{2026}",
-    setup_wizard_btn: "Setup Wizard\u{2026}",
     activate_btn: "Activate",
     active_badge: "Active",
     remove_btn: "Remove",
     supported_badge: "Supported",
     unsupported_badge: "Unsupported",
     no_keyboards_empty: "No keyboards configured yet. Add a keyboard to begin.",
+
+    settings_subtitle: "Configure application language, appearance, workbench defaults, and Linux HIDraw permissions.",
+    settings_workbench_heading: "Workbench & Telemetry Preferences",
+    settings_prefer_2d_label: "Prefer 2D keyboard blueprint stage by default",
+    settings_auto_travel_label: "Automatically stream live key travel when connected to reaulad",
+    settings_hid_perms_heading: "HID Permissions (/dev/hidraw*) & Unsupported Keyboard Access",
+    settings_hid_perms_desc: "Only WIN 60 HE (2E3C:C365) ships in 99-aula-win60he.rules. Other AULA keyboards need a VID:PID uaccess udev rule or temporary setfacl grant for active probing.",
+    settings_open_setup_btn: "Run Onboarding Wizard\u{2026}",
+    settings_reset_prefs_btn: "Reset Preferences",
+    settings_about_heading: "Open Source, Privacy & Support (MizProject)",
 };
 
 const TEXT_ID: UiText = UiText {
@@ -177,6 +198,7 @@ const TEXT_ID: UiText = UiText {
     nav_color_light: "Warna & Lampu",
     nav_hotkeys: "Pintasan",
     nav_diagnostics: "Diagnostik",
+    nav_settings: "Setelan",
 
     guide_help_btn: "Panduan\u{2026}",
     live_travel: "Travel Langsung",
@@ -233,13 +255,22 @@ const TEXT_ID: UiText = UiText {
 
     my_keyboards_title: "Keyboard Saya",
     add_keyboard_btn: "Tambah Keyboard\u{2026}",
-    setup_wizard_btn: "Panduan Awal\u{2026}",
     activate_btn: "Aktifkan",
     active_badge: "Aktif",
     remove_btn: "Hapus",
     supported_badge: "Didukung",
     unsupported_badge: "Belum Didukung",
     no_keyboards_empty: "Belum ada keyboard dikonfigurasi. Tambahkan keyboard untuk memulai.",
+
+    settings_subtitle: "Atur bahasa aplikasi, tema, preferensi meja kerja, dan izin HIDraw Linux.",
+    settings_workbench_heading: "Preferensi Meja Kerja & Telemetri",
+    settings_prefer_2d_label: "Utamakan tampilan skema keyboard 2D secara default",
+    settings_auto_travel_label: "Aktifkan aliran travel tombol langsung saat terhubung ke reaulad",
+    settings_hid_perms_heading: "Izin HID (/dev/hidraw*) & Keyboard Belum Didukung",
+    settings_hid_perms_desc: "Hanya WIN 60 HE (2E3C:C365) yang tercakup dalam 99-aula-win60he.rules. Keyboard AULA lain memerlukan aturan udev uaccess atau setfacl sementara.",
+    settings_open_setup_btn: "Jalankan Panduan Awal\u{2026}",
+    settings_reset_prefs_btn: "Reset Preferensi",
+    settings_about_heading: "Sumber Terbuka, Privasi & Dukungan (MizProject)",
 };
 
 const TEXT_ES: UiText = UiText {
@@ -249,6 +280,7 @@ const TEXT_ES: UiText = UiText {
     nav_color_light: "Color y Luz",
     nav_hotkeys: "Atajos",
     nav_diagnostics: "Diagnóstico",
+    nav_settings: "Ajustes",
 
     guide_help_btn: "Guía y Ayuda\u{2026}",
     live_travel: "Recorrido Vivo",
@@ -305,13 +337,22 @@ const TEXT_ES: UiText = UiText {
 
     my_keyboards_title: "Mis Teclados",
     add_keyboard_btn: "Añadir Teclado\u{2026}",
-    setup_wizard_btn: "Asistente Inicial\u{2026}",
     activate_btn: "Activar",
     active_badge: "Activo",
     remove_btn: "Quitar",
     supported_badge: "Compatible",
     unsupported_badge: "No Compatible",
     no_keyboards_empty: "No hay teclados configurados aún. Añade un teclado para empezar.",
+
+    settings_subtitle: "Configura el idioma, tema, valores predeterminados y permisos HIDraw de Linux.",
+    settings_workbench_heading: "Preferencias de Trabajo y Telemetría",
+    settings_prefer_2d_label: "Usar vista 2D del teclado por defecto",
+    settings_auto_travel_label: "Iniciar telemetría de recorrido en vivo al conectar con reaulad",
+    settings_hid_perms_heading: "Permisos HID (/dev/hidraw*) y Teclados No Compatibles",
+    settings_hid_perms_desc: "Solo WIN 60 HE (2E3C:C365) está en 99-aula-win60he.rules. Otros teclados requieren regla udev VID:PID o setfacl temporal para sondeo activo.",
+    settings_open_setup_btn: "Abrir Asistente Inicial\u{2026}",
+    settings_reset_prefs_btn: "Restablecer Preferencias",
+    settings_about_heading: "Código Abierto, Privacidad y Soporte (MizProject)",
 };
 
 const TEXT_JA: UiText = UiText {
@@ -321,6 +362,7 @@ const TEXT_JA: UiText = UiText {
     nav_color_light: "照明設定",
     nav_hotkeys: "キー割り当て",
     nav_diagnostics: "診断",
+    nav_settings: "設定",
 
     guide_help_btn: "ガイド\u{2026}",
     live_travel: "リアルタイム変位",
@@ -377,13 +419,22 @@ const TEXT_JA: UiText = UiText {
 
     my_keyboards_title: "登録済みキーボード",
     add_keyboard_btn: "キーボード追加\u{2026}",
-    setup_wizard_btn: "初期設定ウィザード\u{2026}",
     activate_btn: "選択",
     active_badge: "使用中",
     remove_btn: "削除",
     supported_badge: "対応済み",
     unsupported_badge: "未対応",
     no_keyboards_empty: "キーボードが登録されていません。キーボードを追加してください。",
+
+    settings_subtitle: "言語・テーマ・初期表示・Linux HIDraw 権限を管理します。",
+    settings_workbench_heading: "ワークベンチとテレメトリ設定",
+    settings_prefer_2d_label: "既定で 2D キーボード図表示を優先する",
+    settings_auto_travel_label: "reaulad 接続時にリアルタイム変位ストリーミングを自動開始",
+    settings_hid_perms_heading: "HID 権限 (/dev/hidraw*) と未対応キーボードアクセス",
+    settings_hid_perms_desc: "99-aula-win60he.rules の対象は WIN 60 HE (2E3C:C365) のみです。未対応機種で詳細プローブを行うには VID:PID 用 udev ルールまたは一時 setfacl が必要です。",
+    settings_open_setup_btn: "初期設定ウィザードを開く\u{2026}",
+    settings_reset_prefs_btn: "設定を初期化",
+    settings_about_heading: "オープンソース・プライバシー・サポート (MizProject)",
 };
 
 const TEXT_ZH_CN: UiText = UiText {
@@ -393,6 +444,7 @@ const TEXT_ZH_CN: UiText = UiText {
     nav_color_light: "灯光与色彩",
     nav_hotkeys: "快捷键",
     nav_diagnostics: "诊断",
+    nav_settings: "设置",
 
     guide_help_btn: "指南与帮助\u{2026}",
     live_travel: "实时行程",
@@ -449,13 +501,22 @@ const TEXT_ZH_CN: UiText = UiText {
 
     my_keyboards_title: "我的键盘",
     add_keyboard_btn: "添加键盘\u{2026}",
-    setup_wizard_btn: "初始设置向导\u{2026}",
     activate_btn: "启用",
     active_badge: "当前",
     remove_btn: "移除",
     supported_badge: "已支持",
     unsupported_badge: "未支持",
     no_keyboards_empty: "尚未配置键盘，请先添加一个键盘。",
+
+    settings_subtitle: "管理应用语言、外观主题、工作台默认项以及 Linux HIDraw 权限。",
+    settings_workbench_heading: "工作台与实时行程首选项",
+    settings_prefer_2d_label: "默认优先使用 2D 键盘平面视图",
+    settings_auto_travel_label: "连接 reaulad 时自动开启实时按键行程监控",
+    settings_hid_perms_heading: "HID 权限 (/dev/hidraw*) 与未适配键盘访问授权",
+    settings_hid_perms_desc: "默认 99-aula-win60he.rules 仅匹配 WIN 60 HE (2E3C:C365)。其他型号需安装对应 VID:PID 的 udev 规则或使用临时 setfacl 授权。",
+    settings_open_setup_btn: "重新打开初始向导\u{2026}",
+    settings_reset_prefs_btn: "恢复默认首选项",
+    settings_about_heading: "开源声明、隐私与问题反馈 (MizProject)",
 };
 
 #[cfg(test)]
@@ -473,6 +534,7 @@ mod tests {
                 t.nav_color_light,
                 t.nav_hotkeys,
                 t.nav_diagnostics,
+                t.nav_settings,
                 t.setup_title,
                 t.disclaimer_privacy,
                 t.disclaimer_liability,
@@ -484,6 +546,12 @@ mod tests {
                 t.my_keyboards_title,
                 t.add_keyboard_btn,
                 t.remove_btn,
+                t.settings_subtitle,
+                t.settings_workbench_heading,
+                t.settings_hid_perms_heading,
+                t.settings_hid_perms_desc,
+                t.settings_open_setup_btn,
+                t.settings_reset_prefs_btn,
             ];
             for val in fields {
                 assert!(!val.trim().is_empty(), "empty field for {lang:?}");

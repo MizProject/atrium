@@ -79,6 +79,10 @@ pub struct AppConfig {
     #[serde(default = "default_theme_dark")]
     pub theme_dark: bool,
     #[serde(default)]
+    pub prefer_2d_stage: bool,
+    #[serde(default = "default_auto_live_travel")]
+    pub auto_live_travel: bool,
+    #[serde(default)]
     pub keyboards: Vec<KeyboardProfileEntry>,
     #[serde(default)]
     pub active_keyboard_id: Option<String>,
@@ -92,6 +96,10 @@ const fn default_theme_dark() -> bool {
     true
 }
 
+const fn default_auto_live_travel() -> bool {
+    true
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -100,6 +108,8 @@ impl Default for AppConfig {
             disclaimer_accepted: false,
             language: AppLanguage::En,
             theme_dark: true,
+            prefer_2d_stage: false,
+            auto_live_travel: true,
             keyboards: Vec::new(),
             active_keyboard_id: None,
         }
@@ -107,6 +117,12 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    pub fn reset_preferences(&mut self) {
+        self.language = AppLanguage::En;
+        self.theme_dark = true;
+        self.prefer_2d_stage = false;
+        self.auto_live_travel = true;
+    }
     pub fn active_keyboard(&self) -> Option<&KeyboardProfileEntry> {
         let active_id = self.active_keyboard_id.as_deref();
         active_id
@@ -266,6 +282,8 @@ mod tests {
             disclaimer_accepted: true,
             language: AppLanguage::Ja,
             theme_dark: false,
+            prefer_2d_stage: true,
+            auto_live_travel: false,
             ..Default::default()
         };
 

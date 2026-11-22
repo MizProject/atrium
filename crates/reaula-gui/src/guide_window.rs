@@ -310,6 +310,7 @@ fn render_daemon_section() -> gpui_kit::AnyElement {
                         .item("Standalone", "reaula daemon start | status | stop", 1)
                         .item("Systemd", "reaula daemon systemd install --enable --start", 1)
                         .item("User Unit", "reaula daemon systemd install --user --enable --start", 1)
+                        .item("Setup Wizard Flag", "reaula-gui --setup", 1)
                         .item(
                             "4-Layer Fault Probe",
                             "Isolates Kernel/USB, Daemon/IPC (SO_PEERCRED), Keyboard HID, and Software Codec.",

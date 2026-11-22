@@ -21,7 +21,7 @@ use gpui_kit::{
     ScrollDelta, ScrollEvent, SharedString, Styled as _, div, img, prelude::*, px, rgb,
 };
 
-use reaula_core::hid_probe::ProbeCheckStatus;
+use reaula_core::hid_probe::{self, HidCandidateSummary, ProbeCheckStatus};
 use reaula_core::keyboards;
 
 use crate::ReaulaGui;
@@ -462,7 +462,7 @@ impl ReaulaGui {
         if !env.udev_rule_present || !hid_ok {
             remedies = remedies.child(copy_command_row(
                 "setup-copy-udev",
-                "Install udev HID permission rules",
+                "Install WIN 60 HE udev rules (unsupported keyboards generate per-device rules in Hardware -> Probe or Settings)",
                 udev_cmd,
                 cx,
             ));
@@ -736,6 +736,9 @@ impl ReaulaGui {
                     )
                     .child(Select::new(&self.sel_setup_hid).small()),
             )
+            .when_some(self.setup.selected_candidate(), |el, cand| {
+                el.child(render_hid_permission_card("setup-hid-perm", cand, cx))
+            })
             .child(
                 v_flex()
                     .w_full()
@@ -1173,7 +1176,7 @@ impl ReaulaGui {
     }
 }
 
-fn theme_preview_card(
+pub(crate) fn theme_preview_card(
     id: &'static str,
     target_dark: bool,
     selected: bool,
@@ -1259,7 +1262,7 @@ fn setup_preset_btn(
         }))
 }
 
-fn status_indicator(
+pub(crate) fn status_indicator(
     ok: bool,
     text: impl Into<SharedString>,
     cx: &gpui_kit::App,
@@ -1293,12 +1296,13 @@ fn status_indicator(
         .into_any_element()
 }
 
-fn copy_command_row(
-    id: &'static str,
-    title: &'static str,
-    cmd: &'static str,
+pub(crate) fn copy_command_row(
+    id: impl Into<gpui_kit::ElementId>,
+    title: impl Into<SharedString>,
+    cmd: impl Into<SharedString>,
     cx: &gpui_kit::App,
 ) -> Div {
+    let cmd_str: SharedString = cmd.into();
     h_flex()
         .w_full()
         .min_w_0()
@@ -1316,7 +1320,7 @@ fn copy_command_row(
                 .flex_1()
                 .min_w(px(220.0))
                 .gap_0p5()
-                .child(div().text_xs().child(title))
+                .child(div().text_xs().child(title.into()))
                 .child(
                     div()
                         .w_full()
@@ -1324,8 +1328,76 @@ fn copy_command_row(
                         .whitespace_normal()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child(cmd),
+                        .child(cmd_str.clone()),
                 ),
         )
-        .child(Clipboard::new(id).small().label("Copy").value(cmd))
+        .child(Clipboard::new(id).small().label("Copy").value(cmd_str))
+}
+
+/// Permission guidance box tailored to the currently selected `/dev/hidraw*` node,
+/// explaining why unsupported VID:PID devices are `0600` and giving exact safe commands.
+pub(crate) fn render_hid_permission_card(
+    id_prefix: &'static str,
+    cand: &HidCandidateSummary,
+    cx: &gpui_kit::App,
+) -> Div {
+    let cmds = hid_probe::permission_commands_for(cand);
+    if cand.readable_writable {
+        return v_flex().w_full().min_w_0().child(
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .items_center()
+                .gap_2()
+                .p_2p5()
+                .rounded(cx.theme().radius)
+                .border_1()
+                .border_color(cx.theme().success)
+                .bg(cx.theme().background)
+                .child(status_indicator(
+                    true,
+                    format!(
+                        "/dev/{} ({}:{}) is R/W accessible for both passive descriptor reads and active vendor queries.",
+                        cmds.hidraw_name, cand.vid_hex, cand.pid_hex
+                    ),
+                    cx,
+                )),
+        );
+    }
+
+    let detail = cand
+        .permission_error
+        .as_deref()
+        .unwrap_or("Permission denied");
+    v_flex()
+        .w_full()
+        .min_w_0()
+        .gap_2()
+        .p_2p5()
+        .rounded(cx.theme().radius)
+        .border_1()
+        .border_color(cx.theme().warning)
+        .bg(cx.theme().background)
+        .child(
+            Alert::warning(
+                (id_prefix, 0usize),
+                format!(
+                    "/dev/{} ({}:{}) is currently root-only ({detail}). The shipped 99-aula-win60he.rules only matches WIN 60 HE (2E3C:C365). Passive HID report-descriptor probing still works now; grant R/W access below if you want active vendor readback, replug if triggered busy, then click Refresh.",
+                    cmds.hidraw_name, cand.vid_hex, cand.pid_hex
+                ),
+            )
+            .title("Unsupported Keyboard HIDraw Permissions"),
+        )
+        .child(copy_command_row(
+            (id_prefix, 1usize),
+            format!("Persistent per-device udev rule ({})", cmds.udev_rule_filename),
+            cmds.install_udev_cmd,
+            cx,
+        ))
+        .child(copy_command_row(
+            (id_prefix, 2usize),
+            "Temporary single-session ACL (resets automatically on unplug or reboot)",
+            cmds.temp_setfacl_cmd,
+            cx,
+        ))
 }

@@ -5,6 +5,7 @@ mod diagnostics;
 mod keymaps;
 pub(crate) mod lighting;
 mod main_view;
+mod settings;
 mod setup;
 
 use std::cell::Cell;
@@ -37,6 +38,7 @@ impl ReaulaGui {
             NavSection::Setup => self.view_setup(cx).into_any_element(),
             NavSection::Main => self.view_main_hub(cx).into_any_element(),
             NavSection::Diagnostics => self.view_diagnostics(cx).into_any_element(),
+            NavSection::Settings => self.view_settings(cx).into_any_element(),
             NavSection::ColorLight => {
                 if let Some(kb) = active_unsupported {
                     self.view_unsupported_board_panel(kb, cx).into_any_element()
