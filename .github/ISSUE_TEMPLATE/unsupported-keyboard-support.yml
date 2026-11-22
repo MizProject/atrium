@@ -1,5 +1,5 @@
 name: Unsupported AULA Keyboard Support Request
-description: Submit your HID capability probe JSON from ReAULA Setup to request support for your keyboard.
+description: Submit your HID capability probe JSON from Atrium Setup to request support for your keyboard.
 title: "[Keyboard Support]: "
 labels:
   - hardware-support
@@ -8,9 +8,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thank you for helping expand **ReAULA** hardware support!
+        Thank you for helping expand **Atrium** hardware support!
 
-        - **Privacy**: ReAULA's probe JSON only collects USB descriptors, capability flags, and protocol check results. Serial numbers, usernames, hostnames, and secrets are omitted.
+        - **Privacy**: Atrium's probe JSON only collects USB descriptors, capability flags, and protocol check results. Serial numbers, usernames, hostnames, and secrets are omitted.
         - **Developer follow-up**: The developer may reply to your issue with follow-up questions or a test build. Please check back and respond promptly so your AULA keyboard can be supported quickly!
         - **Recovery tip**: If your keyboard acted weird during probing, unplug and replug it, then try resetting if possible by holding **Fn + Esc for 10 seconds**.
 
@@ -37,8 +37,8 @@ body:
   - type: textarea
     id: probe_json
     attributes:
-      label: Probe JSON Output (from ReAULA Setup -> Hardware & Probe)
-      description: Paste the full JSON exported from ReAULA's Unsupported Keyboard Prober.
+      label: Probe JSON Output (from Atrium Setup -> Hardware & Probe)
+      description: Paste the full JSON exported from Atrium's Unsupported Keyboard Prober.
       render: json
       placeholder: |
         {

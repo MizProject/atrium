@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Build, verification, packaging, checksum, and release-reporting tool for reaula."""
+"""Build, verification, packaging, checksum, and release-reporting tool for Atrium.
+
+Copyright (C) 2026 MizProject Philippines (GNU AGPL-3.0-or-later).
+"""
 
 from __future__ import annotations
 
@@ -21,7 +24,7 @@ from pathlib import Path
 from typing import Iterable
 
 REPO_ROOT = Path(__file__).resolve().parent
-BINARIES = ("reaula", "reaulad", "reaula-tui", "reaula-gui")
+BINARIES = ("atrium", "atriumd", "atrium-tui", "atrium-gui")
 REQUIRED_PKG_CONFIG_DEPS = (
     ("libudev", "udev / hidraw enumeration"),
     ("libusb-1.0", "USB HID transport"),
@@ -171,7 +174,7 @@ def detect_workspace_version() -> tuple[str, list[dict[str, str]]]:
                 crates.append(
                     {"name": pkg.get("name", ""), "version": pkg.get("version", "0.1.0")}
                 )
-            for name in ("reaula-cli", "reaula-daemon", "reaula-core"):
+            for name in ("atrium-cli", "atrium-daemon", "atrium-core"):
                 for item in crates:
                     if item["name"] == name and item["version"]:
                         return item["version"], crates
@@ -187,7 +190,7 @@ def detect_workspace_version() -> tuple[str, list[dict[str, str]]]:
         if m_name and m_ver:
             crates.append({"name": m_name.group(1), "version": m_ver.group(1)})
     version = next(
-        (c["version"] for c in crates if c["name"] in ("reaula-cli", "reaula-core")),
+        (c["version"] for c in crates if c["name"] in ("atrium-cli", "atrium-core")),
         "0.1.0",
     )
     return version, crates
@@ -271,7 +274,7 @@ def cmd_metadata(args: argparse.Namespace) -> int:
         should_release = False
 
     kind_label = "Pre-release" if prerelease else "Release"
-    release_name = f"reaula {release_tag} ({kind_label})"
+    release_name = f"Atrium {release_tag} ({kind_label})"
     dynamic_version = f"{version}+b{build_number}.{short_sha}"
     target_arch = platform.machine() or "x86_64"
 
@@ -478,7 +481,7 @@ def stage_release_artifacts(
         shutil.rmtree(dist_dir)
     release_dir.mkdir(parents=True, exist_ok=True)
 
-    bundle_name = f"reaula-{release_tag}-linux-{arch}"
+    bundle_name = f"atrium-{release_tag}-linux-{arch}"
     bundle_root = dist_dir / bundle_name
     bin_out = bundle_root / "bin"
     systemd_out = bundle_root / "systemd"
@@ -523,15 +526,21 @@ def stage_release_artifacts(
                 if item.is_file():
                     shutil.copy2(item, dst_dir / item.name)
 
-    for doc_name in ("README.md", "CONTRIBUTING.md"):
+    for doc_name in ("LICENSE", "README.md", "CONTRIBUTING.md"):
         doc_path = REPO_ROOT / doc_name
         if doc_path.is_file():
             shutil.copy2(doc_path, bundle_root / doc_name)
 
+    icon_src = REPO_ROOT / "images" / "icon" / "atrium.png"
+    if icon_src.is_file():
+        assets_dir = bundle_root / "assets"
+        assets_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(icon_src, assets_dir / "atrium.png")
+
     g = git_info()
     version, _ = detect_workspace_version()
     build_info = (
-        f"reaula {release_tag}\n"
+        f"Atrium {release_tag}\n"
         f"version: {version}\n"
         f"commit: {g['full_sha']}\n"
         f"profile: {profile}\n"
@@ -769,9 +778,9 @@ def cmd_build(args: argparse.Namespace) -> int:
         overall_rc = overall_rc or 1
     finally:
         title = (
-            f"✅ reaula Build Succeeded (`{release_tag}` / `{args.profile}`)"
+            f"✅ Atrium Build Succeeded (`{release_tag}` / `{args.profile}`)"
             if overall_rc == 0
-            else f"❌ reaula Build Failed (`{release_tag}` / `{args.profile}`)"
+            else f"❌ Atrium Build Failed (`{release_tag}` / `{args.profile}`)"
         )
         md = format_build_summary_markdown(
             title=title,
@@ -816,7 +825,7 @@ def cmd_report(args: argparse.Namespace) -> int:
         _, changelog = run_quiet(["git", "log", "--oneline", "-n", "15"])
 
     lines: list[str] = [
-        f"## reaula `{args.release_tag}` ({kind})",
+        f"## Atrium `{args.release_tag}` ({kind})",
         "",
         "| Field | Value |",
         "| :--- | :--- |",
@@ -871,18 +880,18 @@ def cmd_report(args: argparse.Namespace) -> int:
             "### Quick Install & Systemd Service",
             "",
             "```bash",
-            "tar -xzf reaula-*.tar.gz && cd reaula-*/",
-            "sudo install -Dm755 bin/reaulad /usr/local/bin/reaulad",
-            "sudo install -Dm755 bin/reaula /usr/local/bin/reaula",
-            "sudo install -Dm755 bin/reaula-tui /usr/local/bin/reaula-tui",
-            "sudo install -Dm755 bin/reaula-gui /usr/local/bin/reaula-gui",
+            "tar -xzf atrium-*.tar.gz && cd atrium-*/",
+            "sudo install -Dm755 bin/atriumd /usr/local/bin/atriumd",
+            "sudo install -Dm755 bin/atrium /usr/local/bin/atrium",
+            "sudo install -Dm755 bin/atrium-tui /usr/local/bin/atrium-tui",
+            "sudo install -Dm755 bin/atrium-gui /usr/local/bin/atrium-gui",
             "",
             "# Option A: Manage via systemd system template service (root HID + per-user socket ACL)",
-            "reaula daemon systemd install --bin /usr/local/bin/reaulad --enable --start",
+            "atrium daemon systemd install --bin /usr/local/bin/atriumd --enable --start",
             "",
-            "# Option B: Or install udev rule + run user-session service or standalone `reaula daemon start`",
+            "# Option B: Or install udev rule + run user-session service or standalone `atrium daemon start`",
             "sudo cp udev/99-aula-win60he.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules",
-            "reaula daemon systemd install --user --bin /usr/local/bin/reaulad --enable --start",
+            "atrium daemon systemd install --user --bin /usr/local/bin/atriumd --enable --start",
             "```",
             "",
         ]
@@ -905,8 +914,8 @@ def cmd_all(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="reaula_build.py",
-        description="Build, lint, test, package, and generate CI/release reports for reaula.",
+        prog="atrium_build.py",
+        description="Build, lint, test, package, and generate CI/release reports for Atrium.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

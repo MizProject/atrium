@@ -1,4 +1,4 @@
-//! `wgpu` 3D cutaway Hall-effect switch mechanism visualizer for `reaula-gui` Diagnostics.
+//! `wgpu` 3D cutaway Hall-effect switch mechanism visualizer for `atrium-gui` Diagnostics.
 //!
 //! Models a translucent cutaway housing, POM `+` cross stem, sculpted cutaway keycap shell,
 //! dynamic compressing helical coil spring, moving N/S neodymium magnet, SMD Hall-effect
@@ -201,7 +201,7 @@ impl SwitchRenderer3D {
 
     #[allow(dead_code)]
     pub fn new() -> Result<Self, String> {
-        let (device, queue) = create_wgpu_device("reaula-switch3d-device")?;
+        let (device, queue) = create_wgpu_device("atrium-switch3d-device")?;
         Self::from_shared_device(device, queue)
     }
 
@@ -992,7 +992,7 @@ mod tests {
         assert_eq!(bytes.len(), (SWITCH_3D_WIDTH * SWITCH_3D_HEIGHT * 4) as usize);
         assert!(bytes.iter().any(|&b| b != 0));
 
-        if let Ok(out_path) = std::env::var("REAULA_DUMP_SWITCH_PREVIEW") {
+        if let Ok(out_path) = std::env::var("ATRIUM_DUMP_SWITCH_PREVIEW") {
             let mut rgba = bytes.to_vec();
             for px in rgba.chunks_exact_mut(4) {
                 px.swap(0, 2);

@@ -1,10 +1,10 @@
 //! Indexed catalog of Aula keyboard models, capabilities, USB IDs, and shared driver types.
 //!
-//! To integrate a new Aula keyboard model into `reaula`:
-//! 1. Create `crates/reaula-core/src/keyboards/<model>/` with `mod.rs` (`pub const SPEC: KeyboardSpec`),
+//! To integrate a new Aula keyboard model into `atrium`:
+//! 1. Create `crates/atrium-core/src/keyboards/<model>/` with `mod.rs` (`pub const SPEC: KeyboardSpec`),
 //!    `protocol.rs`, `keymap.rs`, and `driver.rs`.
 //! 2. Register `&<model>::SPEC` in [`REGISTRY`] below.
-//! 3. Add a matching `reaula-daemon/src/keyboards/<model>.rs` adapter implementing `AulaDriver` and
+//! 3. Add a matching `atrium-daemon/src/keyboards/<model>.rs` adapter implementing `AulaDriver` and
 //!    register it in the daemon's `DRIVERS` index.
 
 pub mod win60he;
@@ -232,7 +232,7 @@ pub struct DiscoveredKeyboard {
     pub vendor_readable_writable: bool,
 }
 
-/// Indexed catalog of all supported Aula keyboards compiled into `reaula`.
+/// Indexed catalog of all supported Aula keyboards compiled into `atrium`.
 pub const REGISTRY: &[&KeyboardSpec] = &[&win60he::SPEC];
 
 /// Return all registered Aula keyboard specifications in discovery priority order.

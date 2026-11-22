@@ -1,4 +1,4 @@
-name: Build & Release reaula
+name: Build & Release Atrium
 
 on:
   push:
@@ -120,7 +120,7 @@ jobs:
           if [ -n "$INPUT_RELEASE_TAG" ]; then
             args+=(--release-tag "$INPUT_RELEASE_TAG")
           fi
-          python3 reaula_build.py "${args[@]}"
+          python3 atrium_build.py "${args[@]}"
 
   build:
     name: "Build, Lint & Test (Ubuntu 26.04)"
@@ -182,7 +182,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Verify build environment
-        run: python3 reaula_build.py check --step-summary "$GITHUB_STEP_SUMMARY"
+        run: python3 atrium_build.py check --step-summary "$GITHUB_STEP_SUMMARY"
 
       - name: Compile, test & package workspace
         env:
@@ -214,10 +214,10 @@ jobs:
           if [ "$INPUT_STRIP" != "true" ]; then
             args+=(--no-strip)
           fi
-          python3 reaula_build.py "${args[@]}"
+          python3 atrium_build.py "${args[@]}"
 
       - name: Refresh release SHA-256 checksums
-        run: python3 reaula_build.py checksums --release-dir "${{ runner.temp }}/release"
+        run: python3 atrium_build.py checksums --release-dir "${{ runner.temp }}/release"
 
       - name: Upload release assets
         uses: actions/upload-artifact@v7
@@ -231,7 +231,7 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: reaula-dist-${{ needs.meta.outputs.build_number }}-${{ needs.meta.outputs.short_sha }}
+          name: atrium-dist-${{ needs.meta.outputs.build_number }}-${{ needs.meta.outputs.short_sha }}
           path: ${{ runner.temp }}/dist/
           if-no-files-found: ignore
           retention-days: 14
@@ -257,7 +257,7 @@ jobs:
       - name: Download build report metadata
         uses: actions/download-artifact@v7
         with:
-          name: reaula-dist-${{ needs.meta.outputs.build_number }}-${{ needs.meta.outputs.short_sha }}
+          name: atrium-dist-${{ needs.meta.outputs.build_number }}-${{ needs.meta.outputs.short_sha }}
           path: dist_meta
 
       - name: Validate release assets & checksums
@@ -272,7 +272,7 @@ jobs:
 
       - name: Generate release report & notes
         run: |
-          python3 reaula_build.py report \
+          python3 atrium_build.py report \
             --release-dir release_assets \
             --report-json dist_meta/build-report.json \
             --release-tag "${{ needs.meta.outputs.release_tag }}" \

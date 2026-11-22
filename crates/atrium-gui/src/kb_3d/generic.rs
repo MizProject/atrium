@@ -1,6 +1,6 @@
 //! Generic 75% (83-key) 3D procedural keyboard rendition for unsupported or probing boards.
 
-use reaula_core::keyboards::KeyDef;
+use atrium_core::keyboards::KeyDef;
 
 use super::{
     CameraPreset, Kb3dCamera, KeyboardModel3d, Vertex, apply_board_tilt, cubic_bezier3,

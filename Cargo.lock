@@ -495,6 +495,63 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
+name = "atrium-cli"
+version = "0.1.0"
+dependencies = [
+ "atrium-core",
+ "clap",
+ "ctrlc",
+ "libc",
+]
+
+[[package]]
+name = "atrium-core"
+version = "0.1.0"
+dependencies = [
+ "hidapi",
+ "libc",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "atrium-daemon"
+version = "0.1.0"
+dependencies = [
+ "atrium-core",
+ "clap",
+ "ctrlc",
+ "libc",
+]
+
+[[package]]
+name = "atrium-gui"
+version = "0.1.0"
+dependencies = [
+ "atrium-core",
+ "bytemuck",
+ "clap",
+ "gpui-kit",
+ "image",
+ "pollster",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "wgpu",
+]
+
+[[package]]
+name = "atrium-tui"
+version = "0.1.0"
+dependencies = [
+ "atrium-core",
+ "clap",
+ "crossterm",
+ "ratatui",
+]
+
+[[package]]
 name = "atspi"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5744,63 +5801,6 @@ dependencies = [
  "bytemuck",
  "font-types 0.12.7",
  "once_cell",
-]
-
-[[package]]
-name = "reaula-cli"
-version = "0.1.0"
-dependencies = [
- "clap",
- "ctrlc",
- "libc",
- "reaula-core",
-]
-
-[[package]]
-name = "reaula-core"
-version = "0.1.0"
-dependencies = [
- "hidapi",
- "libc",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "reaula-daemon"
-version = "0.1.0"
-dependencies = [
- "clap",
- "ctrlc",
- "libc",
- "reaula-core",
-]
-
-[[package]]
-name = "reaula-gui"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "clap",
- "gpui-kit",
- "image",
- "pollster",
- "reaula-core",
- "serde",
- "serde_json",
- "smallvec",
- "wgpu",
-]
-
-[[package]]
-name = "reaula-tui"
-version = "0.1.0"
-dependencies = [
- "clap",
- "crossterm",
- "ratatui",
- "reaula-core",
 ]
 
 [[package]]

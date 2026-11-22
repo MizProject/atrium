@@ -1,5 +1,5 @@
 //! Complete interactive state, hit-testing model, IPC reconnect wrapper,
-//! modals, keymap draft engine, switch diagnostics, and audio sync state for `reaula-tui`.
+//! modals, keymap draft engine, switch diagnostics, and audio sync state for `atrium-tui`.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
@@ -12,17 +12,17 @@ use std::time::{Duration, Instant};
 use ratatui::layout::Rect;
 
 #[cfg(target_os = "linux")]
-use reaula_core::alsa;
-use reaula_core::audio_fx::{AudioEffectStyle, AudioPalette};
-use reaula_core::diagnostics::DiagnosticReport;
-use reaula_core::driver::DeviceProbe;
-use reaula_core::ipc::{
+use atrium_core::alsa;
+use atrium_core::audio_fx::{AudioEffectStyle, AudioPalette};
+use atrium_core::diagnostics::DiagnosticReport;
+use atrium_core::driver::DeviceProbe;
+use atrium_core::ipc::{
     AudioSyncConfig, AudioSyncSource, AudioSyncStatus, DaemonClient, DaemonStatus, FnOverride,
     IpcError, PeerCredentials, ShortcutAction, ShortcutRule, ShortcutTriggerLog,
     ShortcutsSnapshot, VirtualKey,
 };
-use reaula_core::keymap::{self, KeyDef, WIN60HE_KEYS};
-use reaula_core::protocol::{
+use atrium_core::keymap::{self, KeyDef, WIN60HE_KEYS};
+use atrium_core::protocol::{
     self, CalibrationProgress, CalibrationStatus, LIGHT_MAX_LEVEL, LightState, LiveTravelSample,
     MATRIX_SLOTS, PollRate, PrcsPair, TriggerConfig, TriggerMode, WinLockFlags,
 };
@@ -888,9 +888,9 @@ impl App {
     pub fn connect(socket_arg: Option<PathBuf>) -> Result<Self, String> {
         let mut client = DaemonClient::connect(socket_arg.as_deref()).map_err(|e| {
             format!(
-                "could not connect to reaulad ({e}).\n\
-                 Start the secure daemon first:\n  reaula daemon start\n\
-                 Or via systemd:\n  reaula daemon start --systemd"
+                "could not connect to atriumd ({e}).\n\
+                 Start the secure daemon first:\n  atrium daemon start\n\
+                 Or via systemd:\n  atrium daemon start --systemd"
             )
         })?;
         let server_cred = client.server_credentials();
@@ -1088,7 +1088,7 @@ impl App {
             draft_rule_depth_mm: 1.50,
             draft_rule_preset: ShortcutActionPreset::EmitVirtualKey,
             draft_virtual_key: VirtualKey::Up,
-            draft_rule_command: "notify-send 'Reaula WIN 60 HE' 'Hotkey triggered'".into(),
+            draft_rule_command: "notify-send 'Atrium WIN 60 HE' 'Hotkey triggered'".into(),
             km_composer_row: 0,
             km_fw_cursor: 0,
             km_dm_cursor: 0,
@@ -1134,7 +1134,7 @@ impl App {
             let src = app.audio_status.config.source.clone();
             app.select_audio_source_ipc(&src);
         }
-        app.record_feedback("Connect & Probe", 0.0, true, "Connected to reaulad".into());
+        app.record_feedback("Connect & Probe", 0.0, true, "Connected to atriumd".into());
         app.set_travel_streaming(true);
         Ok(app)
     }

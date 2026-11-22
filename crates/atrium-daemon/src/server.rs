@@ -13,8 +13,8 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use reaula_core::ipc::{self, DaemonRequest, DaemonResponse, IpcError, PeerCredentials};
-use reaula_core::protocol::{CalibrationProgress, CalibrationStatus, LiveTravelSample};
+use atrium_core::ipc::{self, DaemonRequest, DaemonResponse, IpcError, PeerCredentials};
+use atrium_core::protocol::{CalibrationProgress, CalibrationStatus, LiveTravelSample};
 
 use crate::coordinator::{CoordinatorMsg, DaemonRuntimeHealth, hardware_loop};
 use crate::shortcuts::resolve_shortcuts_path;
@@ -30,7 +30,7 @@ pub(crate) fn spawn_detached(
         if meta.file_type().is_socket() {
             if UnixStream::connect(socket_path).is_ok() {
                 return Err(format!(
-                    "reaulad is already running on {}",
+                    "atriumd is already running on {}",
                     socket_path.display()
                 ));
             }
@@ -44,7 +44,7 @@ pub(crate) fn spawn_detached(
     }
 
     let exe = std::env::current_exe()
-        .map_err(|e| format!("failed to resolve reaulad executable: {e}"))?;
+        .map_err(|e| format!("failed to resolve atriumd executable: {e}"))?;
     let mut cmd = Command::new(exe);
     cmd.arg("--socket").arg(socket_path);
     if let Some(sf) = shortcuts_file {
@@ -77,16 +77,16 @@ pub(crate) fn spawn_detached(
 
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("failed to spawn detached reaulad: {e}"))?;
+        .map_err(|e| format!("failed to spawn detached atriumd: {e}"))?;
 
     let deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < deadline {
         if let Ok(Some(status)) = child.try_wait() {
-            return Err(format!("reaulad exited immediately with status {status}"));
+            return Err(format!("atriumd exited immediately with status {status}"));
         }
         if socket_path.exists() {
             println!(
-                "reaulad started in background (pid={}, socket={}, allowed_uids={:?})",
+                "atriumd started in background (pid={}, socket={}, allowed_uids={:?})",
                 child.id(),
                 socket_path.display(),
                 allowed_uids
@@ -97,7 +97,7 @@ pub(crate) fn spawn_detached(
     }
 
     Err(format!(
-        "timed out waiting for reaulad socket at {}",
+        "timed out waiting for atriumd socket at {}",
         socket_path.display()
     ))
 }
@@ -139,7 +139,7 @@ pub(crate) fn run_server(
     let hw_keyboard = preferred_keyboard.clone();
     let hw_health = Arc::clone(&health);
     let hw_handle = thread::Builder::new()
-        .name("reaulad-hw".into())
+        .name("atriumd-hw".into())
         .spawn(move || {
             hardware_loop(
                 rx,
@@ -166,7 +166,7 @@ pub(crate) fn run_server(
     notifier.notify_ready(&ready_status);
 
     eprintln!(
-        "reaulad listening on {} (pid={}, uid={}, allowed_uids={:?}, keyboard={}, systemd={})",
+        "atriumd listening on {} (pid={}, uid={}, allowed_uids={:?}, keyboard={}, systemd={})",
         socket_path.display(),
         std::process::id(),
         ipc::current_uid(),
@@ -222,7 +222,7 @@ pub(crate) fn run_server(
                 let tx_client = tx.clone();
                 let shutdown_client = Arc::clone(&shutdown);
                 let _ = thread::Builder::new()
-                    .name(format!("reaulad-client-{client_id}"))
+                    .name(format!("atriumd-client-{client_id}"))
                     .spawn(move || {
                         handle_client(client_id, cred, stream, tx_client, shutdown_client);
                     });
@@ -237,14 +237,14 @@ pub(crate) fn run_server(
         }
     }
 
-    notifier.notify_stopping("Shutting down reaulad cleanly");
+    notifier.notify_stopping("Shutting down atriumd cleanly");
     drop(listener);
     if !socket_activated {
         let _ = fs::remove_file(&socket_path);
     }
     let _ = tx.send(CoordinatorMsg::RequestShutdown);
     let _ = hw_handle.join();
-    eprintln!("reaulad shut down cleanly.");
+    eprintln!("atriumd shut down cleanly.");
     Ok(())
 }
 

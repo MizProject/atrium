@@ -15,11 +15,11 @@ use gpui_kit::{
     ScrollDelta, ScrollEvent, Styled as _, div, img, prelude::*, px, rgb,
 };
 
-use reaula_core::audio_fx::{AudioPalette, NUM_BANDS};
-use reaula_core::keymap;
-use reaula_core::protocol::{self, LIGHT_MAX_LEVEL};
+use atrium_core::audio_fx::{AudioPalette, NUM_BANDS};
+use atrium_core::keymap;
+use atrium_core::protocol::{self, LIGHT_MAX_LEVEL};
 
-use crate::ReaulaGui;
+use crate::AtriumGui;
 use crate::kb_3d::{CameraPreset, KB3D_HEIGHT, KB3D_WIDTH};
 use crate::state::{
     ConnectedState, LightEditorTab, LightViewMode, describe_rgb_human, format_rgb_hex,
@@ -30,7 +30,7 @@ use crate::widgets::{
     COLOR_SWATCHES, KeyboardCanvasMode, MetricCell, render_metric_table,
 };
 
-impl ReaulaGui {
+impl AtriumGui {
     pub(crate) fn view_color_light(&self, state: &ConnectedState, cx: &mut Context<Self>) -> Div {
         let time_s = self.start_instant.elapsed().as_secs_f32();
         let ls = &state.light_state;
@@ -709,7 +709,7 @@ impl ReaulaGui {
                 Alert::warning(
                     "audio-risk-banner",
                     if state.audio_disclaimer_accepted {
-                        "Experimental mode active-ready. Continues in reaulad after closing GUI."
+                        "Experimental mode active-ready. Continues in atriumd after closing GUI."
                     } else {
                         "Hardware risk acknowledgment required before starting audio streaming."
                     },

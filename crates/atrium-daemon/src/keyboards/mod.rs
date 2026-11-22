@@ -1,6 +1,6 @@
 //! Daemon keyboard driver index and polymorphic [`AulaDriver`] trait.
 //!
-//! `reaulad` resolves attached Aula keyboards through [`DRIVERS`] so adding
+//! `atriumd` resolves attached Aula keyboards through [`DRIVERS`] so adding
 //! another keyboard family (e.g. `f75`, `win68he`, `hero68he`) only requires
 //! adding a sibling `<model>.rs` adapter here and appending its [`DriverEntry`].
 
@@ -8,11 +8,11 @@ pub mod win60he;
 
 use std::collections::BTreeMap;
 
-use reaula_core::diagnostics::DiagnosticCheck;
-use reaula_core::keyboards::{
+use atrium_core::diagnostics::DiagnosticCheck;
+use atrium_core::keyboards::{
     self, DeviceProbe, DriverError, KeyboardSpec, discover_connected,
 };
-use reaula_core::protocol::{
+use atrium_core::protocol::{
     BODY_LEN, CalibrationProgress, KEYMAP_BYTES, LightList, LightState, LiveTravelSample,
     MATRIX_SLOTS, PollRate, PrcsPair, SWITCH_TABLE_BYTES, DEADBAND_TABLE_BYTES, TriggerConfig,
     TriggerMode, WinLockFlags, TRIGGER_UNIT_MM_DEFAULT,
@@ -25,7 +25,7 @@ fn unsupported(spec: &KeyboardSpec, feature: &'static str) -> DriverError {
     }
 }
 
-/// Unified hardware backend interface owned by `reaulad`.
+/// Unified hardware backend interface owned by `atriumd`.
 #[allow(dead_code)]
 pub trait AulaDriver {
     fn spec(&self) -> &'static KeyboardSpec;
@@ -207,7 +207,7 @@ pub struct DriverEntry {
     pub open: fn() -> Result<Box<dyn AulaDriver>, String>,
 }
 
-/// Ordered index of keyboard drivers compiled into `reaulad`.
+/// Ordered index of keyboard drivers compiled into `atriumd`.
 pub const DRIVERS: &[DriverEntry] = &[win60he::ENTRY];
 
 /// Look up an indexed daemon driver by model slug, alias, or display name.
@@ -258,7 +258,7 @@ mod tests {
 
     #[test]
     fn daemon_driver_index_resolves_win60he() {
-        let entry = find_entry("win60he").expect("win60he must be indexed in reaulad");
+        let entry = find_entry("win60he").expect("win60he must be indexed in atriumd");
         assert_eq!(entry.spec.id, "win60he");
         assert!(find_entry("nonexistent_model_xyz").is_none());
     }

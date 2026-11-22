@@ -118,11 +118,11 @@ impl EvdevInterceptor {
         let m_shutdown = Arc::clone(&shutdown);
 
         let handle = thread::Builder::new()
-            .name("reaulad-evdev-mgr".into())
+            .name("atriumd-evdev-mgr".into())
             .spawn(move || {
                 manager_loop(&m_desired, &m_active, &m_shutdown, &uinput, &suppression);
             })
-            .expect("spawn reaulad-evdev-mgr thread");
+            .expect("spawn atriumd-evdev-mgr thread");
 
         Self {
             desired_grab,
@@ -187,7 +187,7 @@ fn manager_loop(
                 let w_sup = Arc::clone(suppression);
                 if let Ok(h) = thread::Builder::new()
                     .name(format!(
-                        "reaulad-evdev-{}",
+                        "atriumd-evdev-{}",
                         path.file_name().and_then(|s| s.to_str()).unwrap_or("kb")
                     ))
                     .spawn(move || {
@@ -240,7 +240,7 @@ fn node_worker_loop(
             suppression,
         ) {
             eprintln!(
-                "reaulad evdev grab ended on {}: {err}",
+                "atriumd evdev grab ended on {}: {err}",
                 dev_path.display()
             );
             if err.raw_os_error() == Some(libc::EACCES)
@@ -432,7 +432,7 @@ fn release_stuck_forwarded(
     }
 }
 
-/// Filter out virtual input devices (`uinput`) so `reaulad` never grabs its own output device.
+/// Filter out virtual input devices (`uinput`) so `atriumd` never grabs its own output device.
 pub(crate) fn is_physical_keyboard_sysfs(
     canonical_dev_path: &Path,
     name: &str,
@@ -443,7 +443,8 @@ pub(crate) fn is_physical_keyboard_sysfs(
     if canonical_str.starts_with("/sys/devices/virtual") {
         return false;
     }
-    if name.trim().starts_with("Reaula") || phys.trim().is_empty() {
+    let trimmed = name.trim();
+    if trimmed.starts_with("Atrium") || trimmed.starts_with("Reaula") || phys.trim().is_empty() {
         return false;
     }
     sysfs_cap_has_bit(key_cap, KEY_A_CODE)
@@ -569,7 +570,7 @@ mod tests {
         ));
         assert!(!is_physical_keyboard_sysfs(
             Path::new("/sys/devices/virtual/input/input20"),
-            "Reaula WIN 60 HE Virtual Fn",
+            "Atrium Virtual Fn Keyboard",
             "",
             kb_cap,
         ));

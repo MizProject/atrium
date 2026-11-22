@@ -57,7 +57,7 @@ pub fn open_or_focus(slot: &mut Option<AnyWindowHandle>, cx: &mut App) -> Result
     .map_err(|e| format!("failed to open Guide window: {e}"))?;
 
     let _ = handle.update(cx, |_, window, cx| {
-        window.set_window_title("Reaula Guide & Hardware Reference");
+        window.set_window_title("Atrium Guide & Hardware Reference");
         view.focus_handle(cx).focus(window, cx);
         window.activate_window();
     });
@@ -217,7 +217,7 @@ fn render_keymap_section() -> gpui_kit::AnyElement {
                         )
                         .item(
                             "[DM] Daemon (Aqua #00D7FF)",
-                            "Runs in reaulad with EVIOCGRAB + /dev/uinput. Supports single keys, non-Fn chords, analog depth, media, presets, and unprivileged shell.",
+                            "Runs in atriumd with EVIOCGRAB + /dev/uinput. Supports single keys, non-Fn chords, analog depth, media, presets, and unprivileged shell.",
                             1,
                         )
                         .item(
@@ -243,7 +243,7 @@ fn render_audio_section() -> gpui_kit::AnyElement {
                         .min_w_0()
                         .gap_1p5()
                         .text_xs()
-                        .child(div().w_full().min_w_0().whitespace_normal().child("reaulad runs a privilege-dropped --capture-pcm worker feeding 14-band FFT + beat metrics to cmd 0x09."))
+                        .child(div().w_full().min_w_0().whitespace_normal().child("atriumd runs a privilege-dropped --capture-pcm worker feeding 14-band FFT + beat metrics to cmd 0x09."))
                         .child(div().w_full().min_w_0().whitespace_normal().child("Audio Sync keeps running in the background after closing the GUI until explicitly stopped."))
                         .child(div().w_full().min_w_0().whitespace_normal().child("Continuous per-key streaming is experimental and may accelerate LED wear on some units.")),
                 ),
@@ -307,10 +307,10 @@ fn render_daemon_section() -> gpui_kit::AnyElement {
                         .columns(1)
                         .label_width(px(180.))
                         .bordered(true)
-                        .item("Standalone", "reaula daemon start | status | stop", 1)
-                        .item("Systemd", "reaula daemon systemd install --enable --start", 1)
-                        .item("User Unit", "reaula daemon systemd install --user --enable --start", 1)
-                        .item("Setup Wizard Flag", "reaula-gui --setup", 1)
+                        .item("Standalone", "atrium daemon start | status | stop", 1)
+                        .item("Systemd", "atrium daemon systemd install --enable --start", 1)
+                        .item("User Unit", "atrium daemon systemd install --user --enable --start", 1)
+                        .item("Setup Wizard Flag", "atrium-gui --setup", 1)
                         .item(
                             "4-Layer Fault Probe",
                             "Isolates Kernel/USB, Daemon/IPC (SO_PEERCRED), Keyboard HID, and Software Codec.",

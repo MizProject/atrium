@@ -1,5 +1,5 @@
 //! Systemd service management helpers for initializing, inspecting, installing,
-//! and cleanly stopping `reaulad` via `systemctl` and `journalctl`.
+//! and cleanly stopping `atriumd` via `systemctl` and `journalctl`.
 
 use std::fs;
 use std::io::Write;
@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use clap::{Args, Subcommand};
 
-use reaula_core::ipc::{self, DaemonClient};
+use atrium_core::ipc::{self, DaemonClient};
 
 #[derive(Args, Clone, Debug, Default)]
 pub(crate) struct SystemdTargetArgs {
@@ -17,19 +17,19 @@ pub(crate) struct SystemdTargetArgs {
     #[arg(long)]
     pub(crate) user: bool,
 
-    /// Explicit systemd unit name override (e.g. `reaulad@miku.service` or `reaulad.service`)
+    /// Explicit systemd unit name override (e.g. `atriumd@miku.service` or `atriumd.service`)
     #[arg(long)]
     pub(crate) unit: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum SystemdAction {
-    /// Install the reaulad systemd unit file and reload systemd manager configuration
+    /// Install the atriumd systemd unit file and reload systemd manager configuration
     Install {
         #[command(flatten)]
         target: SystemdTargetArgs,
 
-        /// Explicit path to the `reaulad` binary used in ExecStart (defaults to sibling `reaulad`)
+        /// Explicit path to the `atriumd` binary used in ExecStart (defaults to sibling `atriumd`)
         #[arg(long)]
         bin: Option<PathBuf>,
 
@@ -41,32 +41,32 @@ pub(crate) enum SystemdAction {
         #[arg(long)]
         start: bool,
     },
-    /// Stop, disable, remove the installed reaulad unit file, and reload systemd
+    /// Stop, disable, remove the installed atriumd unit file, and reload systemd
     Uninstall {
         #[command(flatten)]
         target: SystemdTargetArgs,
     },
-    /// Start reaulad via systemd and verify IPC socket readiness
+    /// Start atriumd via systemd and verify IPC socket readiness
     Start {
         #[command(flatten)]
         target: SystemdTargetArgs,
     },
-    /// Stop reaulad cleanly via systemd and verify teardown
+    /// Stop atriumd cleanly via systemd and verify teardown
     Stop {
         #[command(flatten)]
         target: SystemdTargetArgs,
     },
-    /// Restart reaulad cleanly via systemd
+    /// Restart atriumd cleanly via systemd
     Restart {
         #[command(flatten)]
         target: SystemdTargetArgs,
     },
-    /// Enable reaulad systemd service at boot/login
+    /// Enable atriumd systemd service at boot/login
     Enable {
         #[command(flatten)]
         target: SystemdTargetArgs,
     },
-    /// Disable reaulad systemd service at boot/login
+    /// Disable atriumd systemd service at boot/login
     Disable {
         #[command(flatten)]
         target: SystemdTargetArgs,
@@ -76,7 +76,7 @@ pub(crate) enum SystemdAction {
         #[command(flatten)]
         target: SystemdTargetArgs,
     },
-    /// Print recent reaulad logs from journald
+    /// Print recent atriumd logs from journald
     Logs {
         #[command(flatten)]
         target: SystemdTargetArgs,
@@ -129,15 +129,15 @@ pub(crate) fn resolve_unit_name(
     }
 
     match scope {
-        UnitScope::User => Ok("reaulad.service".to_string()),
+        UnitScope::User => Ok("atriumd.service".to_string()),
         UnitScope::System => {
             if let Some(uid) = effective_human_uid()
                 && let Some(acct) = ipc::user_account_for_uid(uid)
             {
-                return Ok(format!("reaulad@{}.service", acct.username));
+                return Ok(format!("atriumd@{}.service", acct.username));
             }
             Err(
-                "could not resolve local non-root username for template unit; pass --unit reaulad@<user>.service"
+                "could not resolve local non-root username for template unit; pass --unit atriumd@<user>.service"
                     .into(),
             )
         }
@@ -159,8 +159,8 @@ pub(crate) fn render_system_template_unit(bin_path: &Path) -> Result<String, Str
     let exe = format_exec_path(bin_path)?;
     Ok(format!(
         "[Unit]\n\
-         Description=Reaula Hardware Driver Daemon for %i\n\
-         Documentation=https://github.com/MizProject/reaula\n\
+         Description=Atrium Hardware Driver Daemon for %i\n\
+         Documentation=https://github.com/MizProject/atrium\n\
          After=local-fs.target systemd-udev-settle.service\n\
          Wants=systemd-udev-settle.service\n\
          \n\
@@ -168,9 +168,9 @@ pub(crate) fn render_system_template_unit(bin_path: &Path) -> Result<String, Str
          Type=notify\n\
          NotifyAccess=main\n\
          ExecStart={exe} --allow-user %i --socket {}/{}\n\
-         RuntimeDirectory=reaula\n\
+         RuntimeDirectory=atrium\n\
          RuntimeDirectoryMode=0700\n\
-         StateDirectory=reaula\n\
+         StateDirectory=atrium\n\
          StateDirectoryMode=0700\n\
          Restart=on-failure\n\
          RestartSec=2s\n\
@@ -191,14 +191,14 @@ pub(crate) fn render_user_service_unit(bin_path: &Path) -> Result<String, String
     let exe = format_exec_path(bin_path)?;
     Ok(format!(
         "[Unit]\n\
-         Description=Reaula Hardware Driver Daemon (User Session)\n\
-         Documentation=https://github.com/MizProject/reaula\n\
+         Description=Atrium Hardware Driver Daemon (User Session)\n\
+         Documentation=https://github.com/MizProject/atrium\n\
          After=graphical-session.target\n\
          \n\
          [Service]\n\
          Type=notify\n\
          NotifyAccess=main\n\
-         ExecStart={exe} --socket %t/reaula/{}\n\
+         ExecStart={exe} --socket %t/atrium/{}\n\
          Restart=on-failure\n\
          RestartSec=2s\n\
          WatchdogSec=30s\n\
@@ -214,7 +214,7 @@ pub(crate) fn render_user_service_unit(bin_path: &Path) -> Result<String, String
 fn format_exec_path(bin_path: &Path) -> Result<String, String> {
     let raw = bin_path.to_string_lossy();
     if raw.contains('\n') || raw.contains('\r') {
-        return Err("reaulad binary path contains unsupported newline characters".into());
+        return Err("atriumd binary path contains unsupported newline characters".into());
     }
     if raw.contains(char::is_whitespace) || raw.contains('"') {
         let escaped = raw.replace('\\', "\\\\").replace('"', "\\\"");
@@ -254,7 +254,7 @@ fn install_unit_file_path(scope: UnitScope, explicit_unit: Option<&str>) -> Resu
                         format!("{u}.service")
                     }
                 }
-                None => "reaulad@.service".to_string(),
+                None => "atriumd@.service".to_string(),
             };
             Ok(PathBuf::from("/etc/systemd/system").join(file_name))
         }
@@ -267,7 +267,7 @@ fn install_unit_file_path(scope: UnitScope, explicit_unit: Option<&str>) -> Resu
                     }
                     u.to_string()
                 }
-                None => "reaulad.service".to_string(),
+                None => "atriumd.service".to_string(),
             };
             Ok(dir.join(file_name))
         }
@@ -317,7 +317,7 @@ pub(crate) fn handle_systemd_action(
             } else if !enable {
                 let flag = if scope == UnitScope::User { "--user " } else { "" };
                 println!(
-                    "Next steps:\n  systemctl {flag}enable --now {unit}\n  reaula daemon status --systemd{}",
+                    "Next steps:\n  systemctl {flag}enable --now {unit}\n  atrium daemon status --systemd{}",
                     if scope == UnitScope::User { " --user" } else { "" }
                 );
             }
@@ -406,7 +406,7 @@ pub(crate) fn start_systemd_unit(
         std::thread::sleep(Duration::from_millis(50));
     }
 
-    println!("Requested systemd start for {unit}. Run `reaula daemon status --systemd` to inspect readiness.");
+    println!("Requested systemd start for {unit}. Run `atrium daemon status --systemd` to inspect readiness.");
     Ok(())
 }
 
@@ -527,7 +527,7 @@ fn ensure_unit_present(scope: UnitScope, unit: &str) -> Result<(), String> {
     } else {
         let user_flag = if scope == UnitScope::User { " --user" } else { "" };
         Err(format!(
-            "systemd unit '{unit}' is not installed. Install it first with:\n  reaula daemon systemd install{user_flag}"
+            "systemd unit '{unit}' is not installed. Install it first with:\n  atrium daemon systemd install{user_flag}"
         ))
     }
 }
@@ -538,12 +538,12 @@ fn resolve_install_binary(
 ) -> Result<PathBuf, String> {
     let raw = explicit
         .or(sibling_bin)
-        .unwrap_or_else(|| PathBuf::from("/usr/local/bin/reaulad"));
+        .unwrap_or_else(|| PathBuf::from("/usr/local/bin/atriumd"));
     let canonical = if raw.exists() {
         fs::canonicalize(&raw).unwrap_or(raw)
     } else {
         return Err(format!(
-            "reaulad binary not found at {}; build the workspace or pass --bin <PATH>",
+            "atriumd binary not found at {}; build the workspace or pass --bin <PATH>",
             raw.display()
         ));
     };
@@ -701,8 +701,8 @@ mod tests {
 
     #[test]
     fn validates_unit_names_strictly() {
-        assert!(is_valid_unit_name("reaulad@miku.service"));
-        assert!(is_valid_unit_name("reaulad.service"));
+        assert!(is_valid_unit_name("atriumd@miku.service"));
+        assert!(is_valid_unit_name("atriumd.service"));
         assert!(!is_valid_unit_name(""));
         assert!(!is_valid_unit_name("../evil.service"));
         assert!(!is_valid_unit_name("foo/bar.service"));
@@ -710,17 +710,17 @@ mod tests {
 
     #[test]
     fn renders_notify_and_watchdog_units() {
-        let sys = render_system_template_unit(Path::new("/usr/local/bin/reaulad")).unwrap();
+        let sys = render_system_template_unit(Path::new("/usr/local/bin/atriumd")).unwrap();
         assert!(sys.contains("Type=notify"));
         assert!(sys.contains("WatchdogSec=30s"));
-        assert!(sys.contains("RuntimeDirectory=reaula"));
-        assert!(sys.contains("StateDirectory=reaula"));
+        assert!(sys.contains("RuntimeDirectory=atrium"));
+        assert!(sys.contains("StateDirectory=atrium"));
         assert!(sys.contains(
-            "ExecStart=/usr/local/bin/reaulad --allow-user %i --socket /run/reaula/reaulad.sock"
+            "ExecStart=/usr/local/bin/atriumd --allow-user %i --socket /run/atrium/atriumd.sock"
         ));
 
-        let usr = render_user_service_unit(Path::new("/opt/my dir/reaulad")).unwrap();
+        let usr = render_user_service_unit(Path::new("/opt/my dir/atriumd")).unwrap();
         assert!(usr.contains("Type=notify"));
-        assert!(usr.contains("ExecStart=\"/opt/my dir/reaulad\" --socket %t/reaula/reaulad.sock"));
+        assert!(usr.contains("ExecStart=\"/opt/my dir/atriumd\" --socket %t/atrium/atriumd.sock"));
     }
 }

@@ -167,7 +167,7 @@ pub fn permission_commands_for(cand: &HidCandidateSummary) -> HidrawPermissionCo
     };
     let vid = format!("{:04x}", cand.vid);
     let pid = format!("{:04x}", cand.pid);
-    let udev_rule_filename = format!("99-aula-probe-{vid}-{pid}.rules");
+    let udev_rule_filename = format!("99-atrium-probe-{vid}-{pid}.rules");
     let udev_rule_line = format!(
         r#"SUBSYSTEM=="hidraw", ATTRS{{idVendor}}=="{vid}", ATTRS{{idProduct}}=="{pid}", MODE="0660", TAG+="uaccess""#
     );
@@ -822,7 +822,7 @@ mod tests {
         };
         let cmds = permission_commands_for(&cand);
         assert_eq!(cmds.hidraw_name, "hidraw0");
-        assert_eq!(cmds.udev_rule_filename, "99-aula-probe-258a-010c.rules");
+        assert_eq!(cmds.udev_rule_filename, "99-atrium-probe-258a-010c.rules");
         assert!(cmds.udev_rule_line.contains("ATTRS{idVendor}==\"258a\""));
         assert!(cmds.udev_rule_line.contains("ATTRS{idProduct}==\"010c\""));
         assert!(cmds.udev_rule_line.contains("TAG+=\"uaccess\""));

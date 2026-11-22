@@ -18,8 +18,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Gauge, Paragraph, Wrap};
 
-use reaula_core::keymap;
-use reaula_core::protocol::PrcsPair;
+use atrium_core::keymap;
+use atrium_core::protocol::PrcsPair;
 
 use crate::state::{
     AUDIO_DISCLAIMER_COOLDOWN_SECS, App, FocusPane, HitRegion, HitTarget, KeymapCategory,
@@ -185,7 +185,7 @@ fn draw_top_bar(f: &mut Frame<'_>, area: Rect, app: &App, hits: &mut Vec<HitRegi
 
     let blk = theme::panel_block(
         format!(
-            "REAULA TUI [EXPERIMENTAL: INCOMPLETE / HAS BUGS] · {} · {} · {} kHz · pid={} ({}) · {} · {}",
+            "ATRIUM TUI [EXPERIMENTAL: INCOMPLETE / HAS BUGS] · {} · {} · {} kHz · pid={} ({}) · {} · {}",
             model, fw, app.poll_rate_khz, app.daemon_status.daemon_pid, mgr, travel, eq
         ),
         false,
@@ -421,7 +421,7 @@ fn draw_audio_disclaimer_modal(
             "WARNING: AULA states WIN 60 HE does NOT officially support Audio Sync lighting.",
             Style::default().fg(theme::INK_WARN).add_modifier(Modifier::BOLD),
         )),
-        Line::from("Continuous per-key cmd 0x09 streaming runs inside reaulad even after TUI exit."),
+        Line::from("Continuous per-key cmd 0x09 streaming runs inside atriumd even after TUI exit."),
         Line::from("High-frequency LED modulation is experimental and may reduce LED lifespan."),
         Line::from("Use strictly at your own risk."),
     ])
@@ -565,9 +565,9 @@ fn draw_help_modal(f: &mut Frame<'_>, full: Rect, hits: &mut Vec<HitRegion>) {
         rect: full,
         action: HitTarget::ModalClose,
     });
-    let rect = centered_rect(76, 20, full);
+    let rect = centered_rect(82, 23, full);
     f.render_widget(Clear, rect);
-    let blk = theme::panel_block("reaula-tui Help & Controls (? / Esc to close)", true);
+    let blk = theme::panel_block("atrium-tui Help & About (? / Esc to close)", true);
     let inner = blk.inner(rect);
     f.render_widget(blk, rect);
     hits.push(HitRegion {
@@ -596,6 +596,15 @@ fn draw_help_modal(f: &mut Frame<'_>, full: Rect, hits: &mut Vec<HitRegion>) {
         Line::from("  Color & Light  16 Firmware effects, HSV/Preset/#Hex color picker, Custom Slots 1-2 painter, Audio EQ"),
         Line::from("  Keymaps        Dual-layer [FW] Amber Flash (cmd 0x18) + [DM] Aqua Daemon rules + Test Fire"),
         Line::from("  Diagnostics    4-Layer Fault Isolation, 5x HID Echo RTT, Switch Cutaway, 61-Key Depth & Return Check"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "About Atrium & GNU AGPL-3.0 Legal Notice",
+            Style::default().fg(theme::CYAN_HIGHLIGHT).add_modifier(Modifier::BOLD),
+        )),
+        Line::from("  Copyright (C) 2026 MizProject Philippines | License: GNU AGPL-3.0-or-later"),
+        Line::from("  No warranty; run `atrium about --license` or see https://www.gnu.org/licenses/"),
+        Line::from("  Source: https://github.com/MizProject/atrium"),
+        Line::from("  Contact: mizproject@proton.me | Telegram @Mizumo_prjkt (https://t.me/Mizumo_prjkt)"),
         Line::from(""),
         Line::from(Span::styled(
             "Click anywhere or press Esc / ? to dismiss",

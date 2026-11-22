@@ -9,8 +9,8 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, Paragraph};
 
-use reaula_core::ipc::VirtualKey;
-use reaula_core::keymap::{self, WIN60HE_KEYS};
+use atrium_core::ipc::VirtualKey;
+use atrium_core::keymap::{self, WIN60HE_KEYS};
 
 use crate::state::{
     App, ArrowClusterPreset, DAEMON_MODIFIERS, FocusPane, HitRegion, HitTarget, KeymapCategory,

@@ -1,4 +1,7 @@
-//! `reaulad` — secure userspace driver daemon owning USB HID access to Aula keyboards.
+// Copyright (C) 2026 MizProject Philippines
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+//! `atriumd`: secure userspace driver daemon owning USB HID access to Aula keyboards.
 
 mod audio;
 mod coordinator;
@@ -15,11 +18,12 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use reaula_core::ipc;
+use atrium_core::{ipc, legal};
 
 #[derive(Parser)]
 #[command(
-    name = "reaulad",
+    name = "atriumd",
+    after_help = legal::CLI_LEGAL_AFTER_HELP,
     version,
     about = "Secure hardware daemon owning USB HID access to indexed Aula keyboards"
 )]
@@ -48,7 +52,7 @@ struct Args {
     #[arg(long)]
     allow_root: bool,
 
-    /// Spawn reaulad detached in the background and exit once the socket is ready
+    /// Spawn atriumd detached in the background and exit once the socket is ready
     #[arg(long)]
     detach: bool,
 
@@ -71,6 +75,13 @@ struct Args {
 }
 
 fn main() -> ExitCode {
+    if std::env::args().nth(1).as_deref() == Some("--about") {
+        println!(
+            "{}",
+            legal::format_about_banner("atriumd", env!("CARGO_PKG_VERSION"))
+        );
+        return ExitCode::SUCCESS;
+    }
     let args = Args::parse();
     let notify_on_err = !args.capture_pcm && !args.detach && !args.list_keyboards;
     match run(args) {
@@ -79,7 +90,7 @@ fn main() -> ExitCode {
             if notify_on_err {
                 systemd::SystemdNotifier::from_env().notify_errno(libc::EIO, &e);
             }
-            eprintln!("reaulad error: {e}");
+            eprintln!("atriumd error: {e}");
             ExitCode::FAILURE
         }
     }
@@ -192,7 +203,7 @@ mod tests {
 
     #[test]
     fn resolves_allow_uid_and_user() {
-        let args = Args::try_parse_from(["reaulad", "--allow-uid", "1000", "--allow-root"]).unwrap();
+        let args = Args::try_parse_from(["atriumd", "--allow-uid", "1000", "--allow-root"]).unwrap();
         let uids = resolve_allowed_uids(&args).unwrap();
         assert_eq!(uids, vec![0, 1000]);
     }
@@ -200,13 +211,13 @@ mod tests {
     #[test]
     fn rejects_unknown_username() {
         let args =
-            Args::try_parse_from(["reaulad", "--allow-user", "definitely_missing_user_xyz"]).unwrap();
+            Args::try_parse_from(["atriumd", "--allow-user", "definitely_missing_user_xyz"]).unwrap();
         assert!(resolve_allowed_uids(&args).is_err());
     }
 
     #[test]
     fn rejects_unknown_keyboard_selector() {
-        let args = Args::try_parse_from(["reaulad", "--keyboard", "does_not_exist"]).unwrap();
+        let args = Args::try_parse_from(["atriumd", "--keyboard", "does_not_exist"]).unwrap();
         let err = run(args).unwrap_err();
         assert!(err.contains("unknown --keyboard"));
     }

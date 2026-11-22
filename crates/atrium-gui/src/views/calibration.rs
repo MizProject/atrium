@@ -7,13 +7,13 @@ use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{Context, Div, ParentElement as _, Styled as _, div};
 
-use reaula_core::keymap;
+use atrium_core::keymap;
 
-use crate::ReaulaGui;
+use crate::AtriumGui;
 use crate::state::ConnectedState;
 use crate::widgets::{KB_SCALE_DEFAULT, KeyboardCanvasMode};
 
-impl ReaulaGui {
+impl AtriumGui {
     pub(crate) fn view_calibration(&self, state: &ConnectedState, cx: &mut Context<Self>) -> Div {
         let done_count = state.cal_calibrated.len();
         let total = keymap::WIN60HE_KEYS.len();

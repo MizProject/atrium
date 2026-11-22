@@ -8,8 +8,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, Paragraph, Wrap};
 
-use reaula_core::audio_fx::{AudioEffectStyle, AudioPalette};
-use reaula_core::protocol;
+use atrium_core::audio_fx::{AudioEffectStyle, AudioPalette};
+use atrium_core::protocol;
 
 use crate::state::{
     App, FocusPane, HitRegion, HitTarget, LIGHT_MODE_OPTIONS, LightEditorTab, PromptPurpose,
@@ -503,7 +503,7 @@ fn draw_audio_panel(f: &mut Frame<'_>, area: Rect, app: &App, hits: &mut Vec<Hit
         &[
             ActionChip::new(
                 if app.audio_status.active {
-                    "STOP Audio EQ (Running in reaulad)"
+                    "STOP Audio EQ (Running in atriumd)"
                 } else {
                     "START Daemon Audio EQ"
                 },
@@ -605,7 +605,7 @@ fn draw_audio_panel(f: &mut Frame<'_>, area: Rect, app: &App, hits: &mut Vec<Hit
     } else {
         f.render_widget(
             Paragraph::new(Span::styled(
-                "Persists inside reaulad after exiting TUI. Requires accepting 10s hardware notice.",
+                "Persists inside atriumd after exiting TUI. Requires accepting 10s hardware notice.",
                 Style::default().fg(theme::INK_MUTED),
             )),
             rows[5],

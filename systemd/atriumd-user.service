@@ -1,12 +1,12 @@
 [Unit]
-Description=Reaula Hardware Driver Daemon (User Session)
-Documentation=https://github.com/MizProject/reaula
+Description=Atrium Hardware Driver Daemon (User Session)
+Documentation=https://github.com/MizProject/atrium
 After=graphical-session.target
 
 [Service]
 Type=notify
 NotifyAccess=main
-ExecStart=/usr/local/bin/reaulad --socket %t/reaula/reaulad.sock
+ExecStart=/usr/local/bin/atriumd --socket %t/atrium/atriumd.sock
 Restart=on-failure
 RestartSec=2s
 WatchdogSec=30s

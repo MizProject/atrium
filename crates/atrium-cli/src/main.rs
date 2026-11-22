@@ -10,41 +10,43 @@ mod systemd_ctl;
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[cfg(target_os = "linux")]
-use reaula_core::alsa::{self, AlsaCapture, AlsaSourceMode};
-use reaula_core::audio_fx::{
+use atrium_core::alsa::{self, AlsaCapture, AlsaSourceMode};
+use atrium_core::audio_fx::{
     self, AudioEffectStyle, AudioPalette, AudioVisualizer, DEFAULT_SAMPLE_RATE, DemoAudioSynth,
 };
-use reaula_core::diagnostics::{
+use atrium_core::diagnostics::{
     self, CheckStatus, DiagnosticCheck, DiagnosticLayer, DiagnosticReport,
 };
-use reaula_core::driver::{DeviceProbe, Win60Driver};
-use reaula_core::ipc::{
+use atrium_core::driver::{DeviceProbe, Win60Driver};
+use atrium_core::ipc::{
     self, AudioSyncConfig, AudioSyncSource, AudioSyncStatus, DaemonClient, FnOverride,
     KeyActuationEntry, VirtualKey,
 };
-use reaula_core::keyboards;
-use reaula_core::keymap;
-use reaula_core::protocol::{
+use atrium_core::keyboards;
+use atrium_core::keymap;
+use atrium_core::legal;
+use atrium_core::protocol::{
     self, BODY_LEN, LightState, PID, PollRate, PrcsPair, TriggerMode, VID, WinLockFlags, mm_to_raw,
 };
-use reaula_core::transport::{HidApiTransport, TransportError, scan_devices};
+use atrium_core::transport::{HidApiTransport, TransportError, scan_devices};
 
 #[derive(Parser)]
 #[command(
-    name = "reaula",
+    name = "atrium",
+    after_help = legal::CLI_LEGAL_AFTER_HELP,
     version,
     about = "Userspace driver CLI for the Aula WIN 60 HE Hall-effect keyboard"
 )]
 struct Cli {
-    /// Connect through a specific reaulad Unix socket path
+    /// Connect through a specific atriumd Unix socket path
     #[arg(long, global = true)]
     socket: Option<PathBuf>,
 
-    /// Require connecting via reaulad (fail if daemon is not running)
+    /// Require connecting via atriumd (fail if daemon is not running)
     #[arg(long, global = true, conflicts_with = "direct")]
     daemon: bool,
 
-    /// Bypass reaulad and talk directly to the HID device
+    /// Bypass atriumd and talk directly to the HID device
     #[arg(long, global = true)]
     direct: bool,
 
@@ -85,7 +87,14 @@ enum Command {
     /// Scan for connected Aula WIN 60 HE interfaces and check permissions
     Scan,
 
-    /// Manage the secure reaulad background daemon
+    /// Display Atrium copyright, GNU AGPL-3.0 legal notices, credits, and contacts
+    About {
+        /// Also print the full GNU Affero General Public License v3.0 text
+        #[arg(long)]
+        license: bool,
+    },
+
+    /// Manage the secure atriumd background daemon
     Daemon {
         #[command(subcommand)]
         action: DaemonAction,
@@ -94,7 +103,7 @@ enum Command {
     /// Launch the experimental Ratatui terminal UI (incomplete, still has bugs)
     Tui,
 
-    /// Launch the GPUI desktop window (connects to reaulad)
+    /// Launch the GPUI desktop window (connects to atriumd)
     Gui,
 
     /// Connect to the keyboard and query firmware, capabilities, lighting, and travel limits
@@ -231,7 +240,7 @@ struct AudioSyncArgs {
 enum AudioAction {
     /// List available ALSA PCM capture devices and monitor targets
     Devices,
-    /// Start audio equalizer inside reaulad and return immediately (persists across GUI/CLI exits)
+    /// Start audio equalizer inside atriumd and return immediately (persists across GUI/CLI exits)
     Start {
         #[command(flatten)]
         cfg: AudioSyncArgs,
@@ -242,13 +251,13 @@ enum AudioAction {
         #[arg(long)]
         no_restore: bool,
     },
-    /// Report status and live telemetry from reaulad's audio equalizer
+    /// Report status and live telemetry from atriumd's audio equalizer
     Status {
-        /// Continuously stream live FFT meter and telemetry from reaulad until Ctrl+C
+        /// Continuously stream live FFT meter and telemetry from atriumd until Ctrl+C
         #[arg(long)]
         watch: bool,
     },
-    /// Run audio equalizer (uses reaulad with live watch unless --dry-run, --direct, or --source stdin)
+    /// Run audio equalizer (uses atriumd with live watch unless --dry-run, --direct, or --source stdin)
     Run {
         #[command(flatten)]
         cfg: AudioSyncArgs,
@@ -264,7 +273,7 @@ enum AudioAction {
         /// Do not save/restore the previous keyboard lighting state on exit
         #[arg(long)]
         no_restore: bool,
-        /// Start in reaulad and exit immediately instead of waiting/stopping on Ctrl+C
+        /// Start in atriumd and exit immediately instead of waiting/stopping on Ctrl+C
         #[arg(long)]
         detach: bool,
     },
@@ -321,7 +330,7 @@ impl From<AudioPaletteArg> for AudioPalette {
 
 #[derive(Subcommand)]
 enum DaemonAction {
-    /// Check whether reaulad is running and display peer-credential & systemd state
+    /// Check whether atriumd is running and display peer-credential & systemd state
     Status {
         /// Query systemd unit status alongside IPC state
         #[arg(long)]
@@ -329,34 +338,34 @@ enum DaemonAction {
         #[command(flatten)]
         target: systemd_ctl::SystemdTargetArgs,
     },
-    /// Start reaulad detached in the background (or via systemd with --systemd)
+    /// Start atriumd detached in the background (or via systemd with --systemd)
     Start {
         /// Run in foreground instead of detaching (ignored with --systemd)
         #[arg(long)]
         foreground: bool,
-        /// Start reaulad cleanly via systemd unit instead of detached background spawn
+        /// Start atriumd cleanly via systemd unit instead of detached background spawn
         #[arg(long)]
         systemd: bool,
         #[command(flatten)]
         target: systemd_ctl::SystemdTargetArgs,
     },
-    /// Stop the running reaulad instance cleanly (or stop its systemd unit with --systemd)
+    /// Stop the running atriumd instance cleanly (or stop its systemd unit with --systemd)
     Stop {
-        /// Stop reaulad cleanly via systemd unit instead of IPC shutdown alone
+        /// Stop atriumd cleanly via systemd unit instead of IPC shutdown alone
         #[arg(long)]
         systemd: bool,
         #[command(flatten)]
         target: systemd_ctl::SystemdTargetArgs,
     },
-    /// Restart reaulad cleanly (or restart via systemd with --systemd)
+    /// Restart atriumd cleanly (or restart via systemd with --systemd)
     Restart {
-        /// Restart reaulad cleanly via systemd unit
+        /// Restart atriumd cleanly via systemd unit
         #[arg(long)]
         systemd: bool,
         #[command(flatten)]
         target: systemd_ctl::SystemdTargetArgs,
     },
-    /// Install, inspect, enable, start, stop, or view logs for reaulad systemd services
+    /// Install, inspect, enable, start, stop, or view logs for atriumd systemd services
     Systemd {
         #[command(subcommand)]
         action: systemd_ctl::SystemdAction,
@@ -774,7 +783,7 @@ impl Backend {
             Self::Daemon(c) => c.begin_custom_stream(brightness).map_err(|e| {
                 let msg = e.to_string();
                 if msg.contains("unknown variant") {
-                    "running reaulad predates fast RGB streaming; restart it (`reaula daemon stop && reaula daemon start`) or pass --dry-run".into()
+                    "running atriumd predates fast RGB streaming; restart it (`atrium daemon stop && atrium daemon start`) or pass --dry-run".into()
                 } else {
                     msg
                 }
@@ -840,14 +849,24 @@ fn run(cli: Cli) -> Result<(), CliError> {
 
     match cli.command {
         Command::Scan => cmd_scan().map_err(CliError::from),
+        Command::About { license } => {
+            println!(
+                "{}",
+                legal::format_about_banner("atrium", env!("CARGO_PKG_VERSION"))
+            );
+            if license {
+                println!("\n{}", legal::LICENSE_FULL_TEXT);
+            }
+            Ok(())
+        }
         Command::Daemon { action } => cmd_daemon(action, policy),
         Command::Tui => {
             eprintln!(
-                "Warning: reaula-tui is not yet properly developed and still has known bugs. Prefer `reaula gui` for daily use."
+                "Warning: atrium-tui is not yet properly developed and still has known bugs. Prefer `atrium gui` for daily use."
             );
-            launch_sibling("reaula-tui", policy.socket)
+            launch_sibling("atrium-tui", policy.socket)
         }
-        Command::Gui => launch_sibling("reaula-gui", policy.socket),
+        Command::Gui => launch_sibling("atrium-gui", policy.socket),
         Command::Probe => cmd_probe(policy),
         Command::Actuation { action } => cmd_actuation(action, policy),
         Command::Light { action } => cmd_light(action, policy),
@@ -965,7 +984,7 @@ fn connect_backend(policy: ConnectionPolicy<'_>) -> Result<Backend, CliError> {
             Ok(client) => return Ok(Backend::Daemon(client)),
             Err(err) if policy.require_daemon => {
                 return Err(CliError::Message(format!(
-                    "could not connect to reaulad ({err}); start it with `reaula daemon start`"
+                    "could not connect to atriumd ({err}); start it with `atrium daemon start`"
                 )));
             }
             Err(_) => {}
@@ -1058,12 +1077,12 @@ fn cmd_daemon(action: DaemonAction, policy: ConnectionPolicy<'_>) -> Result<(), 
             }
             let mut client = DaemonClient::connect(policy.socket).map_err(|e| {
                 CliError::Message(format!(
-                    "reaulad is not reachable at {}: {e}",
+                    "atriumd is not reachable at {}: {e}",
                     ipc::discover_client_socket_path(policy.socket).display()
                 ))
             })?;
             let st = client.ping().map_err(|e| e.to_string())?;
-            println!("reaulad status  : running");
+            println!("atriumd status  : running");
             println!(
                 "Service Manager : {}",
                 if st.systemd_managed {
@@ -1115,7 +1134,7 @@ fn cmd_daemon(action: DaemonAction, policy: ConnectionPolicy<'_>) -> Result<(), 
                 }
                 std::thread::sleep(Duration::from_millis(15));
             }
-            println!("Stopped reaulad cleanly.");
+            println!("Stopped atriumd cleanly.");
             Ok(())
         }
         DaemonAction::Start {
@@ -1128,11 +1147,11 @@ fn cmd_daemon(action: DaemonAction, policy: ConnectionPolicy<'_>) -> Result<(), 
                     .map_err(map_sd_err);
             }
             if DaemonClient::connect(policy.socket).is_ok() {
-                println!("reaulad is already running.");
+                println!("atriumd is already running.");
                 return Ok(());
             }
 
-            let bin = sibling_binary("reaulad")?;
+            let bin = sibling_binary("atriumd")?;
             let scan = scan_devices(VID, PID).map_err(|e| e.to_string())?;
             let vendor_accessible = scan.sysfs.iter().any(|d| {
                 d.descriptor.as_ref().and_then(|desc| desc.usage_page)
@@ -1175,12 +1194,12 @@ fn cmd_daemon(action: DaemonAction, policy: ConnectionPolicy<'_>) -> Result<(), 
 
             let status = cmd
                 .status()
-                .map_err(|e| CliError::Message(format!("failed to start reaulad: {e}")))?;
+                .map_err(|e| CliError::Message(format!("failed to start atriumd: {e}")))?;
             if status.success() {
                 Ok(())
             } else {
                 Err(CliError::Message(format!(
-                    "reaulad exited with status {status}"
+                    "atriumd exited with status {status}"
                 )))
             }
         }
@@ -1208,7 +1227,7 @@ fn cmd_daemon(action: DaemonAction, policy: ConnectionPolicy<'_>) -> Result<(), 
             )
         }
         DaemonAction::Systemd { action } => {
-            let sibling = sibling_binary("reaulad").ok();
+            let sibling = sibling_binary("atriumd").ok();
             systemd_ctl::handle_systemd_action(action, sibling, policy.socket, policy.no_sudo)
                 .map_err(map_sd_err)
         }
@@ -1303,7 +1322,7 @@ fn cmd_scan() -> Result<(), String> {
         && let Ok(st) = client.ping()
     {
         println!(
-            "reaulad is running on {} (allowed_uids={:?}, keyboard={}, model={}).",
+            "atriumd is running on {} (allowed_uids={:?}, keyboard={}, model={}).",
             st.socket_path,
             st.allowed_uids,
             if st.device_connected {
@@ -1319,7 +1338,7 @@ fn cmd_scan() -> Result<(), String> {
     } else if any_denied {
         println!(
             "Vendor interface access is restricted to root.\n\
-             Start the secure daemon once (`reaula daemon start`), or answer 'y' when prompted for sudo."
+             Start the secure daemon once (`atrium daemon start`), or answer 'y' when prompted for sudo."
         );
     }
 
@@ -1988,7 +2007,7 @@ fn cmd_doctor(policy: ConnectionPolicy<'_>) -> Result<(), CliError> {
                         latency_ms: None,
                         detail: err.to_string(),
                         remedy: Some(
-                            "Restart reaulad (`reaula daemon stop && reaula daemon start`).".into(),
+                            "Restart atriumd (`atrium daemon stop && atrium daemon start`).".into(),
                         ),
                     });
                     checks.extend(diagnostics::run_software_checks());
@@ -2007,7 +2026,7 @@ fn cmd_doctor(policy: ConnectionPolicy<'_>) -> Result<(), CliError> {
                     status: CheckStatus::Fail,
                     latency_ms: None,
                     detail: err.to_string(),
-                    remedy: Some("Start reaulad with `reaula daemon start`.".into()),
+                    remedy: Some("Start atriumd with `atrium daemon start`.".into()),
                 });
                 checks.extend(diagnostics::run_software_checks());
                 DiagnosticReport {
@@ -2016,7 +2035,7 @@ fn cmd_doctor(policy: ConnectionPolicy<'_>) -> Result<(), CliError> {
                     checks,
                 }
             }
-            Err(err) => build_local_diagnostic_report(&format!("reaulad offline ({err})")),
+            Err(err) => build_local_diagnostic_report(&format!("atriumd offline ({err})")),
         }
     } else {
         build_local_diagnostic_report("--direct mode requested; bypassed daemon IPC")
@@ -2035,7 +2054,7 @@ fn build_local_diagnostic_report(daemon_note: &str) -> DiagnosticReport {
         latency_ms: None,
         detail: daemon_note.to_string(),
         remedy: Some(
-            "Start reaulad (`reaula daemon start`) for shared non-root GUI/CLI access.".into(),
+            "Start atriumd (`atrium daemon start`) for shared non-root GUI/CLI access.".into(),
         ),
     });
 
@@ -2052,7 +2071,7 @@ fn build_local_diagnostic_report(daemon_note: &str) -> DiagnosticReport {
                 latency_ms: None,
                 detail: e.to_string(),
                 remedy: Some(
-                    "Run via `reaula daemon start` (or install udev rules) to access /dev/hidraw*."
+                    "Run via `atrium daemon start` (or install udev rules) to access /dev/hidraw*."
                         .into(),
                 ),
             });
@@ -2069,7 +2088,7 @@ fn build_local_diagnostic_report(daemon_note: &str) -> DiagnosticReport {
 }
 
 fn print_diagnostic_report(report: &DiagnosticReport) {
-    println!("=== Reaula 4-Layer Diagnostics ===");
+    println!("=== Atrium 4-Layer Diagnostics ===");
     for layer in [
         DiagnosticLayer::Kernel,
         DiagnosticLayer::Daemon,
@@ -2242,7 +2261,7 @@ fn build_audio_sync_config(cfg: &AudioSyncArgs) -> Result<AudioSyncConfig, CliEr
         }
         AudioSourceArg::Stdin => {
             return Err(CliError::Message(
-                "--source stdin streams from this terminal process; use `reaula audio run --source stdin`".into(),
+                "--source stdin streams from this terminal process; use `atrium audio run --source stdin`".into(),
             ));
         }
     };
@@ -2263,7 +2282,7 @@ fn friendly_audio_ipc_err(err: ipc::IpcError) -> CliError {
     let msg = err.to_string();
     if msg.contains("unknown variant") {
         CliError::Message(
-            "Running reaulad predates daemon-hosted Audio Sync; restart reaulad (`reaula daemon stop && reaula daemon start`).".into(),
+            "Running atriumd predates daemon-hosted Audio Sync; restart atriumd (`atrium daemon stop && atrium daemon start`).".into(),
         )
     } else {
         CliError::Message(msg)
@@ -2273,7 +2292,7 @@ fn friendly_audio_ipc_err(err: ipc::IpcError) -> CliError {
 fn print_audio_status(st: &AudioSyncStatus) {
     println!(
         "Audio Equalizer : {}",
-        if st.active { "ACTIVE (running in reaulad)" } else { "IDLE" }
+        if st.active { "ACTIVE (running in atriumd)" } else { "IDLE" }
     );
     println!("Input Source    : {}", st.source_label);
     println!(
@@ -2560,13 +2579,13 @@ fn cmd_audio(action: AudioAction, policy: ConnectionPolicy<'_>) -> Result<(), Cl
         AudioAction::Start { cfg } => {
             if policy.force_direct {
                 return Err(CliError::Message(
-                    "`audio start` runs in reaulad; remove --direct or use `audio run --direct`".into(),
+                    "`audio start` runs in atriumd; remove --direct or use `audio run --direct`".into(),
                 ));
             }
             let sync_cfg = build_audio_sync_config(&cfg)?;
             let mut client = DaemonClient::connect(policy.socket).map_err(|e| {
                 CliError::Message(format!(
-                    "could not connect to reaulad ({e}); start it with `reaula daemon start`"
+                    "could not connect to atriumd ({e}); start it with `atrium daemon start`"
                 ))
             })?;
             let st = client.start_audio_sync(sync_cfg).map_err(friendly_audio_ipc_err)?;
@@ -2592,7 +2611,7 @@ fn cmd_audio(action: AudioAction, policy: ConnectionPolicy<'_>) -> Result<(), Cl
         AudioAction::Status { watch } => {
             let mut client = DaemonClient::connect(policy.socket).map_err(|e| {
                 CliError::Message(format!(
-                    "could not connect to reaulad ({e}); start it with `reaula daemon start`"
+                    "could not connect to atriumd ({e}); start it with `atrium daemon start`"
                 ))
             })?;
             let st = client.get_audio_sync_state().map_err(friendly_audio_ipc_err)?;
@@ -2622,22 +2641,22 @@ fn cmd_audio(action: AudioAction, policy: ConnectionPolicy<'_>) -> Result<(), Cl
                             .map_err(friendly_audio_ipc_err)?;
                         print_audio_status(&st);
                         if detach {
-                            println!("Detached: equalizer continues running inside reaulad.");
+                            println!("Detached: equalizer continues running inside atriumd.");
                             return Ok(());
                         }
-                        println!("Streaming inside reaulad (Ctrl+C stops and restores lighting)...");
+                        println!("Streaming inside atriumd (Ctrl+C stops and restores lighting)...");
                         return watch_daemon_audio(&mut client, duration, true, !no_restore);
                     }
                     Err(err) if policy.require_daemon => {
                         return Err(CliError::Message(format!(
-                            "could not connect to reaulad ({err}); start it with `reaula daemon start`"
+                            "could not connect to atriumd ({err}); start it with `atrium daemon start`"
                         )));
                     }
                     Err(_) => {}
                 }
             } else if detach {
                 return Err(CliError::Message(
-                    "--detach requires running through reaulad (incompatible with --dry-run/--direct/--source stdin)".into(),
+                    "--detach requires running through atriumd (incompatible with --dry-run/--direct/--source stdin)".into(),
                 ));
             }
             run_audio_local(&cfg, rate, duration, dry_run, no_restore, policy)
@@ -2669,17 +2688,17 @@ mod tests {
 
     #[test]
     fn parses_daemon_and_sudo_flags() {
-        let cli = Cli::try_parse_from(["reaula", "--daemon", "probe"]).unwrap();
+        let cli = Cli::try_parse_from(["atrium", "--daemon", "probe"]).unwrap();
         assert!(cli.daemon);
         assert!(!cli.direct);
 
-        let conflict = Cli::try_parse_from(["reaula", "--daemon", "--direct", "probe"]);
+        let conflict = Cli::try_parse_from(["atrium", "--daemon", "--direct", "probe"]);
         assert!(conflict.is_err());
 
-        let doc = Cli::try_parse_from(["reaula", "doctor"]).unwrap();
+        let doc = Cli::try_parse_from(["atrium", "doctor"]).unwrap();
         assert!(matches!(doc.command, Command::Doctor));
 
-        let sd_start = Cli::try_parse_from(["reaula", "daemon", "start", "--systemd"]).unwrap();
+        let sd_start = Cli::try_parse_from(["atrium", "daemon", "start", "--systemd"]).unwrap();
         assert!(matches!(
             sd_start.command,
             Command::Daemon {
@@ -2688,7 +2707,7 @@ mod tests {
         ));
 
         let sd_inst = Cli::try_parse_from([
-            "reaula",
+            "atrium",
             "daemon",
             "systemd",
             "install",
@@ -2754,7 +2773,7 @@ mod tests {
 
     #[test]
     fn parses_audio_subcommands_and_flags() {
-        let dev = Cli::try_parse_from(["reaula", "audio", "devices"]).unwrap();
+        let dev = Cli::try_parse_from(["atrium", "audio", "devices"]).unwrap();
         assert!(matches!(
             dev.command,
             Command::Audio {
@@ -2763,7 +2782,7 @@ mod tests {
         ));
 
         let start = Cli::try_parse_from([
-            "reaula",
+            "atrium",
             "audio",
             "start",
             "--source",
@@ -2781,7 +2800,7 @@ mod tests {
             }
         ));
 
-        let stop = Cli::try_parse_from(["reaula", "audio", "stop", "--no-restore"]).unwrap();
+        let stop = Cli::try_parse_from(["atrium", "audio", "stop", "--no-restore"]).unwrap();
         assert!(matches!(
             stop.command,
             Command::Audio {
@@ -2789,7 +2808,7 @@ mod tests {
             }
         ));
 
-        let status = Cli::try_parse_from(["reaula", "audio", "status", "--watch"]).unwrap();
+        let status = Cli::try_parse_from(["atrium", "audio", "status", "--watch"]).unwrap();
         assert!(matches!(
             status.command,
             Command::Audio {
@@ -2798,7 +2817,7 @@ mod tests {
         ));
 
         let run = Cli::try_parse_from([
-            "reaula",
+            "atrium",
             "audio",
             "run",
             "--source",

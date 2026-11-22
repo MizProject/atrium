@@ -1,4 +1,4 @@
-//! Linux `/dev/uinput` virtual keyboard backend for `reaulad` custom Fn / gesture keybinds.
+//! Linux `/dev/uinput` virtual keyboard backend for `atriumd` custom Fn / gesture keybinds.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -6,7 +6,7 @@ use std::mem::size_of;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
 
-use reaula_core::ipc::VirtualKey;
+use atrium_core::ipc::VirtualKey;
 
 const UINPUT_MAX_NAME_SIZE: usize = 80;
 const EV_SYN: u16 = 0x00;
@@ -76,7 +76,7 @@ impl VirtualKeyboard {
             name: [0u8; UINPUT_MAX_NAME_SIZE],
             ff_effects_max: 0,
         };
-        let label = b"Reaula WIN 60 HE Virtual Fn";
+        let label = b"Atrium Virtual Fn Keyboard";
         setup.name[..label.len()].copy_from_slice(label);
 
         // SAFETY: `setup` is a valid initialized `UinputSetup` struct matching Linux kernel ABI.

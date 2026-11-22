@@ -1,17 +1,18 @@
 [package]
-name = "reaula-daemon"
+name = "atrium-daemon"
 version = "0.1.0"
 edition = "2024"
 description = "Privileged USB/HID hardware daemon with UID-restricted Unix socket IPC for Aula WIN 60 HE"
-license = "MIT OR Apache-2.0"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/MizProject/atrium"
 
 [[bin]]
-name = "reaulad"
+name = "atriumd"
 path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 ctrlc = { version = "3.4", features = ["termination"] }
 libc = "0.2"
-reaula-core = { path = "../reaula-core" }
+atrium-core = { path = "../atrium-core" }
 

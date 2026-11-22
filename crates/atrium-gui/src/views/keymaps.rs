@@ -12,9 +12,9 @@ use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{Context, Div, ParentElement as _, Styled as _, Window, div, prelude::*, px, rgb};
 
-use reaula_core::keymap;
+use atrium_core::keymap;
 
-use crate::ReaulaGui;
+use crate::AtriumGui;
 use crate::state::{
     ArrowClusterPreset, ConnectedState, KeymapCategory, KeymapLayerView, ShortcutActionPreset,
 };
@@ -27,7 +27,7 @@ const ARROW_PRESETS: [(ArrowClusterPreset, &str); 3] = [
     (ArrowClusterPreset::Wasd, "W/A/S/D"),
 ];
 
-impl ReaulaGui {
+impl AtriumGui {
     pub(crate) fn view_hotkeys(
         &self,
         state: &ConnectedState,
@@ -192,7 +192,7 @@ impl ReaulaGui {
             let reason = state
                 .uinput_error
                 .as_deref()
-                .unwrap_or("/dev/uinput unavailable in reaulad");
+                .unwrap_or("/dev/uinput unavailable in atriumd");
             card = card.child(Alert::error("uinput-offline", format!("[DM] uinput offline: {reason}")));
         }
 
@@ -443,7 +443,7 @@ impl ReaulaGui {
                             .outline()
                             .label("Sample Notify")
                             .on_click(cx.listener(|this, _, window, cx| {
-                                let sample = "notify-send 'Reaula WIN 60 HE' 'Hotkey triggered'";
+                                let sample = "notify-send 'Atrium WIN 60 HE' 'Hotkey triggered'";
                                 if let Ok(st) = &mut this.conn {
                                     st.draft_rule_command = sample.into();
                                 }

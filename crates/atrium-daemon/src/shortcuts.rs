@@ -10,20 +10,20 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use reaula_core::diagnostics;
-use reaula_core::ipc::{
+use atrium_core::diagnostics;
+use atrium_core::ipc::{
     self, DAEMON_INDICATOR_AQUA_RGB, DAEMON_INDICATOR_PULSE_RGB, DaemonResponse, ShortcutRule,
     ShortcutTriggerLog, ShortcutsSnapshot, VirtualKey,
 };
-use reaula_core::keyboards::{KeyDef, KeyboardSpec};
-use reaula_core::keymap;
-use reaula_core::protocol::{LiveTravelSample, MATRIX_SLOTS};
+use atrium_core::keyboards::{KeyDef, KeyboardSpec};
+use atrium_core::keymap;
+use atrium_core::protocol::{LiveTravelSample, MATRIX_SLOTS};
 
 use crate::{evdev, uinput};
 
 const MAX_SHORTCUT_LOG: usize = 40;
 const INDICATOR_PULSE_WINDOW: Duration = Duration::from_millis(650);
-const SYSTEM_SHORTCUTS_FILE: &str = "/var/lib/reaula/shortcuts.json";
+const SYSTEM_SHORTCUTS_FILE: &str = "/var/lib/atrium/shortcuts.json";
 
 pub(crate) struct ShortcutEngine {
     pub(crate) rules: Vec<ShortcutRule>,
@@ -48,7 +48,7 @@ impl Default for ShortcutEngine {
         Self {
             rules: Vec::new(),
             watcher_active: false,
-            active_keys: reaula_core::keyboards::win60he::SPEC.keys,
+            active_keys: atrium_core::keyboards::win60he::SPEC.keys,
             held_keys: BTreeSet::new(),
             modifier_engaged: BTreeSet::new(),
             latched_rules: BTreeSet::new(),
@@ -568,7 +568,7 @@ pub(crate) fn validate_daemon_rules(rules: &[ShortcutRule]) -> Result<(), String
                 rule.name
             ));
         }
-        if let reaula_core::ipc::ShortcutAction::RunCommand { command } = &rule.action
+        if let atrium_core::ipc::ShortcutAction::RunCommand { command } = &rule.action
             && command.trim().is_empty()
         {
             return Err(format!(
@@ -843,8 +843,8 @@ pub(crate) fn spawn_user_command(command: &str, allowed_uids: &[u32]) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use reaula_core::ipc::ShortcutAction;
-    use reaula_core::protocol::TriggerMode;
+    use atrium_core::ipc::ShortcutAction;
+    use atrium_core::protocol::TriggerMode;
 
     use super::*;
 
@@ -1080,10 +1080,10 @@ mod tests {
 
     #[test]
     fn resolves_default_shortcuts_file_path() {
-        let sock = PathBuf::from("/tmp/reaula-test/reaulad.sock");
+        let sock = PathBuf::from("/tmp/atrium-test/atriumd.sock");
         assert_eq!(
             resolve_shortcuts_path(None, &sock),
-            Some(PathBuf::from("/tmp/reaula-test/shortcuts.json"))
+            Some(PathBuf::from("/tmp/atrium-test/shortcuts.json"))
         );
     }
 

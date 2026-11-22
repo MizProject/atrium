@@ -1,10 +1,10 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/reaula-core",
-    "crates/reaula-daemon",
-    "crates/reaula-cli",
-    "crates/reaula-tui",
-    "crates/reaula-gui",
+    "crates/atrium-core",
+    "crates/atrium-daemon",
+    "crates/atrium-cli",
+    "crates/atrium-tui",
+    "crates/atrium-gui",
 ]
-default-members = ["crates/reaula-cli"]
+default-members = ["crates/atrium-cli"]

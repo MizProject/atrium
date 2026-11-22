@@ -21,10 +21,10 @@ use gpui_kit::{
     ScrollDelta, ScrollEvent, SharedString, Styled as _, div, img, prelude::*, px, rgb,
 };
 
-use reaula_core::hid_probe::{self, HidCandidateSummary, ProbeCheckStatus};
-use reaula_core::keyboards;
+use atrium_core::hid_probe::{self, HidCandidateSummary, ProbeCheckStatus};
+use atrium_core::keyboards;
 
-use crate::ReaulaGui;
+use crate::AtriumGui;
 use crate::i18n::UiText;
 use crate::kb_3d::{CameraPreset, KB3D_HEIGHT, KB3D_WIDTH};
 use crate::state::{NavSection, SetupHardwareMode};
@@ -32,11 +32,11 @@ use crate::theme::{self, HardwareColors};
 use crate::widgets::{MetricCell, render_metric_table, render_unsupported_2d_canvas};
 
 const GH_UNSUPPORTED_ISSUE_URL: &str =
-    "https://github.com/MizProject/reaula/issues/new?template=unsupported-keyboard-support.yml";
+    "https://github.com/MizProject/atrium/issues/new?template=unsupported-keyboard-support.yml";
 const GH_SUPPORT_ISSUE_URL: &str =
-    "https://github.com/MizProject/reaula/issues/new?template=support-request.yml";
+    "https://github.com/MizProject/atrium/issues/new?template=support-request.yml";
 
-impl ReaulaGui {
+impl AtriumGui {
     pub(crate) fn view_setup(&self, cx: &mut Context<Self>) -> Div {
         let t = self.text();
         let step = self.setup.step.min(4);
@@ -425,7 +425,7 @@ impl ReaulaGui {
         let env = &self.setup.env_status;
         let hid_ok = env.hidraw_rw_ok > 0;
         let udev_cmd = "sudo install -m 644 udev/99-aula-win60he.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules && sudo udevadm trigger";
-        let systemd_cmd = "systemctl --user enable --now reaulad.service";
+        let systemd_cmd = "systemctl --user enable --now atriumd.service";
 
         let metrics = render_metric_table(
             vec![
@@ -450,7 +450,7 @@ impl ReaulaGui {
                     status_indicator(env.uinput_ok, &env.uinput_detail, cx),
                 ),
                 MetricCell::element(
-                    "reaulad IPC",
+                    "atriumd IPC",
                     status_indicator(env.daemon_connected, &env.daemon_detail, cx),
                 ),
             ],
@@ -476,7 +476,7 @@ impl ReaulaGui {
         if !env.daemon_connected {
             remedies = remedies.child(copy_command_row(
                 "setup-copy-systemd",
-                "Start reaulad via systemd user unit (or CLI daemon start)",
+                "Start atriumd via systemd user unit (or CLI daemon start)",
                 systemd_cmd,
                 cx,
             ));
@@ -1181,7 +1181,7 @@ pub(crate) fn theme_preview_card(
     target_dark: bool,
     selected: bool,
     label: &'static str,
-    cx: &mut Context<ReaulaGui>,
+    cx: &mut Context<AtriumGui>,
 ) -> Div {
     let (canvas_hex, card_hex, border_hex, fg_hex) = theme::setup_theme_swatch(target_dark);
 
@@ -1250,7 +1250,7 @@ fn setup_preset_btn(
     label: &'static str,
     preset: CameraPreset,
     current: Option<CameraPreset>,
-    cx: &mut Context<ReaulaGui>,
+    cx: &mut Context<AtriumGui>,
 ) -> Button {
     Button::new(id)
         .xsmall()

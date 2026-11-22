@@ -1,7 +1,7 @@
 //! Modular `wgpu` 3D renderer and model registry for Aula keyboards.
 //!
 //! Renders an offscreen `Bgra8Unorm` frame matching `gpui::RenderImage`'s Blade
-//! atlas format so `reaula-gui` can display real-time 3D RGB effects, per-key
+//! atlas format so `atrium-gui` can display real-time 3D RGB effects, per-key
 //! Custom paints, selection highlights, and live analog key depression.
 //!
 //! Models are grouped under `kb_3d/<model>.rs` and indexed in [`MODELS`].
@@ -26,10 +26,10 @@ use gpui_kit::RenderImage;
 use image::{Frame, RgbaImage};
 use smallvec::SmallVec;
 
-use reaula_core::ipc::{DAEMON_INDICATOR_AQUA_RGB, DAEMON_INDICATOR_PULSE_RGB};
-use reaula_core::keyboards::{KeyDef, KeyboardSpec};
-use reaula_core::keymap::WIN60HE_KEYS;
-use reaula_core::protocol::{LightState, MATRIX_SLOTS};
+use atrium_core::ipc::{DAEMON_INDICATOR_AQUA_RGB, DAEMON_INDICATOR_PULSE_RGB};
+use atrium_core::keyboards::{KeyDef, KeyboardSpec};
+use atrium_core::keymap::WIN60HE_KEYS;
+use atrium_core::protocol::{LightState, MATRIX_SLOTS};
 
 /// Output width in pixels (`832 * 4 = 3328` bytes per row, a multiple of 256).
 pub const KB3D_WIDTH: u32 = 832;
@@ -142,7 +142,7 @@ pub struct KeyboardModel3d {
     pub build_mesh: fn(&mut Vec<Vertex>, &mut Vec<u32>),
 }
 
-/// Indexed 3D keyboard models compiled into `reaula-gui`.
+/// Indexed 3D keyboard models compiled into `atrium-gui`.
 pub const MODELS: &[KeyboardModel3d] = &[win60he::MODEL, generic::MODEL];
 
 /// Look up a registered 3D keyboard model by ID or alias.
@@ -403,7 +403,7 @@ pub struct KeyboardRenderer3D {
 impl KeyboardRenderer3D {
     pub fn new_for_keyboard(keyboard_id: Option<&str>) -> Result<Self, String> {
         let model = find_model(keyboard_id);
-        let (device, queue) = create_wgpu_device("reaula-kb3d-device")?;
+        let (device, queue) = create_wgpu_device("atrium-kb3d-device")?;
 
         let (vertices, indices) = build_scene_mesh(model);
         let index_count = u32::try_from(indices.len()).map_err(|_| "mesh too large".to_string())?;

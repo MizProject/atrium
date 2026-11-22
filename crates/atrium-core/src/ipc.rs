@@ -1,5 +1,5 @@
-//! Secure Unix domain socket IPC protocol between `reaulad` and local clients
-//! (`reaula`, `reaula-tui`, `reaula-gui`).
+//! Secure Unix domain socket IPC protocol between `atriumd` and local clients
+//! (`atrium`, `atrium-tui`, `atrium-gui`).
 //!
 //! Security model (fail-closed):
 //! 1. Local-only Unix stream socket (never binds a network/TCP port).
@@ -33,8 +33,9 @@ use crate::protocol::{
     TriggerConfig, TriggerMode, WinLockFlags,
 };
 
-pub const SYSTEM_SOCKET_DIR: &str = "/run/reaula";
-pub const SOCKET_FILENAME: &str = "reaulad.sock";
+pub const SYSTEM_SOCKET_DIR: &str = "/run/atrium";
+pub const SOCKET_FILENAME: &str = "atriumd.sock";
+pub const LEGACY_SOCKET_FILENAME: &str = "reaulad.sock";
 pub const MAX_IPC_LINE_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Error)]
@@ -882,23 +883,28 @@ pub fn is_peer_authorized(cred: &PeerCredentials, allowed_uids: &[u32]) -> bool 
     cred.pid > 0 && allowed_uids.contains(&cred.uid)
 }
 
-/// Default socket path for starting `reaulad`.
+/// Default socket path for starting `atriumd`.
 pub fn default_daemon_socket_path() -> PathBuf {
     if current_uid() == 0 {
         PathBuf::from(SYSTEM_SOCKET_DIR).join(SOCKET_FILENAME)
     } else if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR")
         && !runtime.is_empty()
     {
-        PathBuf::from(runtime).join("reaula").join(SOCKET_FILENAME)
+        PathBuf::from(runtime).join("atrium").join(SOCKET_FILENAME)
     } else {
-        PathBuf::from(format!("/tmp/reaula-{}", current_uid())).join(SOCKET_FILENAME)
+        PathBuf::from(format!("/tmp/atrium-{}", current_uid())).join(SOCKET_FILENAME)
     }
 }
 
-/// Discover the socket path a client (`reaula`, `reaula-tui`, `reaula-gui`) should connect to.
+/// Discover the socket path a client (`atrium`, `atrium-tui`, `atrium-gui`) should connect to.
 pub fn discover_client_socket_path(explicit: Option<&Path>) -> PathBuf {
     if let Some(p) = explicit {
         return p.to_path_buf();
+    }
+    if let Some(env_path) = std::env::var_os("ATRIUM_SOCKET")
+        && !env_path.is_empty()
+    {
+        return PathBuf::from(env_path);
     }
     if let Some(env_path) = std::env::var_os("REAULA_SOCKET")
         && !env_path.is_empty()
@@ -908,14 +914,24 @@ pub fn discover_client_socket_path(explicit: Option<&Path>) -> PathBuf {
     if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR")
         && !runtime.is_empty()
     {
-        let user_sock = PathBuf::from(runtime).join("reaula").join(SOCKET_FILENAME);
+        let user_sock = Path::new(&runtime).join("atrium").join(SOCKET_FILENAME);
         if user_sock.exists() {
             return user_sock;
+        }
+        let legacy_user_sock = Path::new(&runtime)
+            .join("reaula")
+            .join(LEGACY_SOCKET_FILENAME);
+        if legacy_user_sock.exists() {
+            return legacy_user_sock;
         }
     }
     let sys_sock = PathBuf::from(SYSTEM_SOCKET_DIR).join(SOCKET_FILENAME);
     if sys_sock.exists() {
         return sys_sock;
+    }
+    let legacy_sys_sock = PathBuf::from("/run/reaula").join(LEGACY_SOCKET_FILENAME);
+    if legacy_sys_sock.exists() {
+        return legacy_sys_sock;
     }
     sys_sock
 }
@@ -1030,7 +1046,7 @@ pub fn read_json_line<R: BufRead, T: for<'de> Deserialize<'de>>(
     Ok(parsed)
 }
 
-/// Synchronous client connection to `reaulad`.
+/// Synchronous client connection to `atriumd`.
 pub struct DaemonClient {
     writer: UnixStream,
     reader: BufReader<UnixStream>,
@@ -1039,7 +1055,7 @@ pub struct DaemonClient {
 }
 
 impl DaemonClient {
-    /// Connect to `reaulad` at `socket_path` (or auto-discovered path) and verify
+    /// Connect to `atriumd` at `socket_path` (or auto-discovered path) and verify
     /// that the daemon process belongs to root (`0`) or the current user.
     pub fn connect(socket_path: Option<&Path>) -> Result<Self, IpcError> {
         let path = discover_client_socket_path(socket_path);
@@ -1472,7 +1488,7 @@ impl DaemonClient {
     }
 }
 
-/// Dedicated streaming socket connection receiving live travel events from `reaulad`.
+/// Dedicated streaming socket connection receiving live travel events from `atriumd`.
 pub struct TravelSubscription {
     writer: UnixStream,
     reader: BufReader<UnixStream>,
@@ -1587,8 +1603,8 @@ mod tests {
 
     #[test]
     fn bind_secure_listener_creates_0700_dir_and_0600_socket() {
-        let base = std::env::temp_dir().join(format!("reaula-ipc-test-{}", std::process::id()));
-        let sock = base.join("reaulad.sock");
+        let base = std::env::temp_dir().join(format!("atrium-ipc-test-{}", std::process::id()));
+        let sock = base.join("atriumd.sock");
         let uid = current_uid();
         let listener = bind_secure_listener(&sock, &[uid]).unwrap();
 
@@ -1623,10 +1639,10 @@ mod tests {
 
     #[test]
     fn bind_secure_listener_rejects_symlink_socket() {
-        let base = std::env::temp_dir().join(format!("reaula-ipc-sym-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("atrium-ipc-sym-{}", std::process::id()));
         let _ = fs::create_dir_all(&base);
         let target = base.join("real");
-        let sock = base.join("reaulad.sock");
+        let sock = base.join("atriumd.sock");
         fs::write(&target, b"x").unwrap();
         std::os::unix::fs::symlink(&target, &sock).unwrap();
 

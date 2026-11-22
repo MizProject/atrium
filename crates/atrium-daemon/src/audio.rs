@@ -1,7 +1,7 @@
 //! Daemon-owned real-time ALSA/Demo audio capture, 1024-pt FFT visualizer, and status snapshot.
 //!
-//! When `reaulad` runs as `root`, ALSA capture for desktop PipeWire/PulseAudio monitors is
-//! executed inside a privilege-dropped self child (`reaulad --capture-pcm`) running under the
+//! When `atriumd` runs as `root`, ALSA capture for desktop PipeWire/PulseAudio monitors is
+//! executed inside a privilege-dropped self child (`atriumd --capture-pcm`) running under the
 //! authorized local UID with `XDG_RUNTIME_DIR` and `HOME` configured, streaming mono `i16le` PCM
 //! frames into this engine over an anonymous pipe.
 
@@ -13,13 +13,13 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use reaula_core::alsa::{self, AlsaCapture, AlsaSourceMode};
-use reaula_core::audio_fx::{
+use atrium_core::alsa::{self, AlsaCapture, AlsaSourceMode};
+use atrium_core::audio_fx::{
     AudioFrameMetrics, AudioVisualizer, DEFAULT_SAMPLE_RATE, DemoAudioSynth,
 };
-use reaula_core::ipc::{self, AudioSyncConfig, AudioSyncSource, AudioSyncStatus};
-use reaula_core::keyboards::DriverError;
-use reaula_core::protocol::{LIGHT_MAX_LEVEL, LightState, MATRIX_SLOTS};
+use atrium_core::ipc::{self, AudioSyncConfig, AudioSyncSource, AudioSyncStatus};
+use atrium_core::keyboards::DriverError;
+use atrium_core::protocol::{LIGHT_MAX_LEVEL, LightState, MATRIX_SLOTS};
 
 use crate::keyboards::AulaDriver;
 
@@ -315,7 +315,7 @@ impl DaemonAudioEngine {
         let source = config.source.clone();
 
         let join = thread::Builder::new()
-            .name("reaulad-audio".into())
+            .name("atriumd-audio".into())
             .spawn(move || {
                 run_audio_worker(
                     source,
@@ -434,7 +434,7 @@ impl DaemonAudioInput {
         child_slot: &Arc<Mutex<Option<Child>>>,
     ) -> Result<(Self, String, u32), String> {
         let exe = std::env::current_exe()
-            .map_err(|e| format!("failed to resolve reaulad binary for audio helper: {e}"))?;
+            .map_err(|e| format!("failed to resolve atriumd binary for audio helper: {e}"))?;
 
         let mut cmd = Command::new(exe);
         cmd.arg("--capture-pcm")
@@ -668,7 +668,7 @@ fn run_audio_worker(
     }
 }
 
-/// Entrypoint for `reaulad --capture-pcm`: runs strictly single-threaded under user UID.
+/// Entrypoint for `atriumd --capture-pcm`: runs strictly single-threaded under user UID.
 pub(crate) fn run_pcm_capture_helper(
     source: &str,
     device: Option<&str>,
@@ -724,9 +724,9 @@ pub(crate) fn run_pcm_capture_helper(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reaula_core::diagnostics::DiagnosticCheck;
-    use reaula_core::keyboards::{self, DeviceProbe, KeyboardSpec};
-    use reaula_core::protocol::LightState;
+    use atrium_core::diagnostics::DiagnosticCheck;
+    use atrium_core::keyboards::{self, DeviceProbe, KeyboardSpec};
+    use atrium_core::protocol::LightState;
 
     struct StubDriver {
         begin_count: usize,

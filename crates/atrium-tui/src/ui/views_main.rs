@@ -8,8 +8,8 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use reaula_core::keymap;
-use reaula_core::protocol::{self, PrcsPair, TriggerMode};
+use atrium_core::keymap;
+use atrium_core::protocol::{self, PrcsPair, TriggerMode};
 
 use crate::state::{App, FocusPane, HitRegion, HitTarget, PromptPurpose, TextPromptModal};
 use crate::theme;
@@ -403,11 +403,11 @@ fn draw_socd_poll_card(f: &mut Frame<'_>, area: Rect, app: &App, hits: &mut Vec<
             .iter()
             .take(2)
             .map(|p| {
-                let n1 = reaula_core::keymap::WIN60HE_KEYS
+                let n1 = atrium_core::keymap::WIN60HE_KEYS
                     .iter()
                     .find(|k| k.hid_code == p.key1_hid)
                     .map_or("?", |k| k.name);
-                let n2 = reaula_core::keymap::WIN60HE_KEYS
+                let n2 = atrium_core::keymap::WIN60HE_KEYS
                     .iter()
                     .find(|k| k.hid_code == p.key2_hid)
                     .map_or("?", |k| k.name);

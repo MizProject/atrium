@@ -238,7 +238,7 @@ const VK_HID_MAP: &[(crate::ipc::VirtualKey, u8)] = &[
 /// Map a standard [`VirtualKey`](crate::ipc::VirtualKey) to its USB HID Keyboard usage (`0x07`).
 ///
 /// Consumer-control keys (`Mute`, `VolumeUp`, etc.) cannot be encoded as plain HID `0x07` keymap
-/// entries and return `None` so callers keep them handled via `reaulad` `uinput`.
+/// entries and return `None` so callers keep them handled via `atriumd` `uinput`.
 pub fn virtual_key_to_hid_usage(vk: crate::ipc::VirtualKey) -> Option<u8> {
     VK_HID_MAP
         .iter()

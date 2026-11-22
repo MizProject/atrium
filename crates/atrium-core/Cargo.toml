@@ -1,9 +1,10 @@
 [package]
-name = "reaula-core"
+name = "atrium-core"
 version = "0.1.0"
 edition = "2024"
 description = "Core HID driver, protocol codec, keymap, and secure IPC for the Aula WIN 60 HE"
-license = "MIT OR Apache-2.0"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/MizProject/atrium"
 
 [dependencies]
 hidapi = "2.6"

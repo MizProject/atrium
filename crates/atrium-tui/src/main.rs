@@ -1,4 +1,7 @@
-//! `reaula-tui` (experimental): Ratatui terminal control panel for Aula WIN 60 HE.
+// Copyright (C) 2026 MizProject Philippines
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+//! `atrium-tui` (experimental): Ratatui terminal control panel for Aula WIN 60 HE.
 //! Notice: the TUI is not yet properly developed and still has known bugs.
 
 mod state;
@@ -9,6 +12,8 @@ use std::io;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
+
+use atrium_core::legal;
 
 use clap::Parser;
 use crossterm::event::{
@@ -26,12 +31,13 @@ use crate::state::App;
 
 #[derive(Parser)]
 #[command(
-    name = "reaula-tui",
+    name = "atrium-tui",
     version,
-    about = "Experimental Ratatui TUI for Aula WIN 60 HE (incomplete, still has known bugs)"
+    about = "Experimental Ratatui TUI for Aula WIN 60 HE (incomplete, still has known bugs)",
+    after_help = legal::CLI_LEGAL_AFTER_HELP
 )]
 struct Args {
-    /// Connect to a specific reaulad Unix domain socket
+    /// Connect to a specific atriumd Unix domain socket
     #[arg(long)]
     socket: Option<PathBuf>,
 }
@@ -72,11 +78,18 @@ impl Drop for TerminalGuard {
 }
 
 fn main() -> ExitCode {
+    if std::env::args().nth(1).as_deref() == Some("--about") {
+        println!(
+            "{}",
+            legal::format_about_banner("atrium-tui", env!("CARGO_PKG_VERSION"))
+        );
+        return ExitCode::SUCCESS;
+    }
     let args = Args::parse();
     match run(args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("reaula-tui error: {e}");
+            eprintln!("atrium-tui error: {e}");
             ExitCode::FAILURE
         }
     }

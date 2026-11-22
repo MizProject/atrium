@@ -1,5 +1,5 @@
 //! Regal Navy three-shade palette, contrast-aware RGB/HSV color utilities,
-//! and shared Ratatui styling primitives matching `reaula-gui`.
+//! and shared Ratatui styling primitives matching `atrium-gui`.
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;

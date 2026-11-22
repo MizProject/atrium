@@ -2,15 +2,15 @@
 
 use std::collections::BTreeMap;
 
-use reaula_core::diagnostics::{self, DiagnosticCheck};
-use reaula_core::keyboards::win60he::{self, driver::Win60Driver, protocol};
-use reaula_core::keyboards::{DeviceProbe, DriverError, KeyboardSpec};
-use reaula_core::protocol::{
+use atrium_core::diagnostics::{self, DiagnosticCheck};
+use atrium_core::keyboards::win60he::{self, driver::Win60Driver, protocol};
+use atrium_core::keyboards::{DeviceProbe, DriverError, KeyboardSpec};
+use atrium_core::protocol::{
     BODY_LEN, CalibrationProgress, DEADBAND_TABLE_BYTES, KEYMAP_BYTES, LightList, LightState,
     LiveTravelSample, MATRIX_SLOTS, PollRate, PrcsPair, SWITCH_TABLE_BYTES,
     TRIGGER_UNIT_MM_DEFAULT, TriggerConfig, TriggerMode, WinLockFlags,
 };
-use reaula_core::transport::HidApiTransport;
+use atrium_core::transport::HidApiTransport;
 
 use super::{AulaDriver, DriverEntry};
 

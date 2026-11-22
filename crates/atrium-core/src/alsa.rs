@@ -211,7 +211,7 @@ impl AlsaCapture {
             AlsaSourceMode::Monitor => {
                 let mut list = Vec::with_capacity(4);
                 // Prefer explicit ALSA `pulse:DEVICE=<sink>.monitor` so multi-threaded callers
-                // (like reaula-gui) never need to mutate process environment variables.
+                // (like atrium-gui) never need to mutate process environment variables.
                 if let Some(mon) = default_monitor_source_name() {
                     list.push(format!("pulse:DEVICE={mon}"));
                 }

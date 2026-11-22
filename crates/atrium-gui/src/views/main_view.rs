@@ -12,18 +12,18 @@ use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{Context, Div, IntoElement as _, ParentElement as _, Styled as _, div, px};
 
-use reaula_core::hid_probe::{DEVELOPER_NOTICE, RECOVERY_NOTICE};
-use reaula_core::keymap;
-use reaula_core::protocol::TriggerMode;
+use atrium_core::hid_probe::{DEVELOPER_NOTICE, RECOVERY_NOTICE};
+use atrium_core::keymap;
+use atrium_core::protocol::TriggerMode;
 
-use crate::ReaulaGui;
+use crate::AtriumGui;
 use crate::config::{ConfiguredKeyboardKind, KeyboardProfileEntry};
 use crate::state::{ConnectedState, NavSection, SetupHardwareMode};
 use crate::widgets::{
     KB_SCALE_DEFAULT, KeyboardCanvasMode, MetricCell, SWITCH_OPTIONS, render_metric_table,
 };
 
-impl ReaulaGui {
+impl AtriumGui {
     pub(crate) fn view_main_hub(&self, cx: &mut Context<Self>) -> Div {
         let t = self.text();
         let active_kb = self.config.active_keyboard().cloned();
@@ -305,7 +305,7 @@ impl ReaulaGui {
                             )
                             .child(
                                 Link::new("hub-gh-issue")
-                                    .href("https://github.com/MizProject/reaula/issues/new?template=unsupported-keyboard-support.yml")
+                                    .href("https://github.com/MizProject/atrium/issues/new?template=unsupported-keyboard-support.yml")
                                     .child(
                                         h_flex()
                                             .items_center()
@@ -687,7 +687,7 @@ impl ReaulaGui {
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if let Ok(st) = &mut this.conn {
                                     st.socd_enabled = true;
-                                    st.socd_pairs = vec![reaula_core::protocol::PrcsPair {
+                                    st.socd_pairs = vec![atrium_core::protocol::PrcsPair {
                                         key1_hid: 0x04,
                                         key2_hid: 0x07,
                                         model: 1,
@@ -705,12 +705,12 @@ impl ReaulaGui {
                                 if let Ok(st) = &mut this.conn {
                                     st.socd_enabled = true;
                                     st.socd_pairs = vec![
-                                        reaula_core::protocol::PrcsPair {
+                                        atrium_core::protocol::PrcsPair {
                                             key1_hid: 0x04,
                                             key2_hid: 0x07,
                                             model: 1,
                                         },
-                                        reaula_core::protocol::PrcsPair {
+                                        atrium_core::protocol::PrcsPair {
                                             key1_hid: 0x1A,
                                             key2_hid: 0x16,
                                             model: 1,

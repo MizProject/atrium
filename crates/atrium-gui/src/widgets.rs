@@ -9,11 +9,11 @@ use gpui_kit::{
     prelude::*, px, rgb,
 };
 
-use reaula_core::ipc::{ShortcutAction, ShortcutRule, VirtualKey};
-use reaula_core::keymap::{KEYBOARD_CANVAS_HEIGHT, KEYBOARD_CANVAS_WIDTH, WIN60HE_KEYS};
-use reaula_core::protocol::TriggerMode;
+use atrium_core::ipc::{ShortcutAction, ShortcutRule, VirtualKey};
+use atrium_core::keymap::{KEYBOARD_CANVAS_HEIGHT, KEYBOARD_CANVAS_WIDTH, WIN60HE_KEYS};
+use atrium_core::protocol::TriggerMode;
 
-use crate::ReaulaGui;
+use crate::AtriumGui;
 use crate::kb_3d::{self, Kb3dSceneInput, MascotPose, switch::stem_color_hex_for_switch};
 use crate::state::{
     ConnectedState, KeymapCategory, KeymapLayerView, SwitchInspectionSnapshot, format_rgb_hex,
@@ -190,7 +190,7 @@ pub fn action_kind_tag(action: &ShortcutAction) -> &'static str {
     }
 }
 
-impl ReaulaGui {
+impl AtriumGui {
     pub(crate) fn render_keyboard_canvas(
         &self,
         state: &ConnectedState,
@@ -631,7 +631,7 @@ impl ReaulaGui {
             match mode {
                 KeyboardCanvasMode::Calibration => {}
                 KeyboardCanvasMode::HotkeyPicker => {
-                    if key_index == reaula_core::keymap::idx::FN {
+                    if key_index == atrium_core::keymap::idx::FN {
                         self.status_line = "Fn (#122) is reserved for Firmware [FW] Flash.".into();
                     } else if ev.modifiers().shift {
                         if state.draft_category == KeymapCategory::FirmwareFnFlash {
@@ -641,7 +641,7 @@ impl ReaulaGui {
                         } else {
                             state.draft_rule_modifier = Some(key_index);
                             sync_keymaps = true;
-                            if let Some(k) = reaula_core::keymap::by_index(key_index) {
+                            if let Some(k) = atrium_core::keymap::by_index(key_index) {
                                 self.status_line =
                                     format!("Daemon modifier: {} (#{key_index})", k.name);
                             }
@@ -659,14 +659,14 @@ impl ReaulaGui {
                         }
                         sync_keymaps = true;
                         let fw = state.keyboard_fn_map.get(&key_index).map(|&hid| {
-                            format!("FW: Fn+Key -> {}", reaula_core::keymap::usb_hid_name(hid))
+                            format!("FW: Fn+Key -> {}", atrium_core::keymap::usb_hid_name(hid))
                         });
                         let dm = state
                             .shortcut_rules
                             .iter()
                             .find(|r| r.trigger_key == key_index)
                             .map(|r| format!("DM: {} ({})", r.gesture_label(), r.action.summary()));
-                        if let Some(k) = reaula_core::keymap::by_index(key_index) {
+                        if let Some(k) = atrium_core::keymap::by_index(key_index) {
                             self.status_line = match (fw, dm) {
                                 (Some(f), Some(d)) => format!("{} (#{key_index}): {f} | {d}", k.name),
                                 (Some(f), None) => format!("{} (#{key_index}): {f}", k.name),
@@ -698,7 +698,7 @@ impl ReaulaGui {
                 KeyboardCanvasMode::DiagnosticsDepth => {
                     state.focused_key = key_index;
                     self.dirty_switch_3d = true;
-                    if let Some(k) = reaula_core::keymap::by_index(key_index) {
+                    if let Some(k) = atrium_core::keymap::by_index(key_index) {
                         self.status_line = format!("Inspecting {} (#{}).", k.name, key_index);
                     }
                 }
@@ -1049,7 +1049,7 @@ fn hotkey_key_appearance(
 
     let is_draft_target = state.draft_rule_key == key_index;
     let is_draft_mod = match state.draft_category {
-        KeymapCategory::FirmwareFnFlash => key_index == reaula_core::keymap::idx::FN,
+        KeymapCategory::FirmwareFnFlash => key_index == atrium_core::keymap::idx::FN,
         KeymapCategory::DaemonMemory => state.draft_rule_modifier == Some(key_index),
     };
     let top_tag = if is_draft_target {
@@ -1223,7 +1223,7 @@ fn short_kb_fn_badge(hid: u8) -> String {
         0x35 => "FW:`".into(),
         0x46 => "FW:Prt".into(),
         _ => {
-            let label = reaula_core::keymap::usb_hid_name(hid);
+            let label = atrium_core::keymap::usb_hid_name(hid);
             let compact: String = label
                 .chars()
                 .filter(|c| !c.is_whitespace())
@@ -1360,8 +1360,8 @@ mod tests {
             id: 1,
             name: "Up".into(),
             enabled: true,
-            modifier_key: Some(reaula_core::keymap::idx::FN),
-            trigger_key: reaula_core::keymap::idx::R,
+            modifier_key: Some(atrium_core::keymap::idx::FN),
+            trigger_key: atrium_core::keymap::idx::R,
             trigger_depth_mm: 1.5,
             action: ShortcutAction::EmitKey {
                 key: VirtualKey::Up,
@@ -1372,7 +1372,7 @@ mod tests {
             name: "Shell".into(),
             enabled: true,
             modifier_key: None,
-            trigger_key: reaula_core::keymap::idx::T,
+            trigger_key: atrium_core::keymap::idx::T,
             trigger_depth_mm: 1.5,
             action: ShortcutAction::RunCommand {
                 command: "echo ok".into(),

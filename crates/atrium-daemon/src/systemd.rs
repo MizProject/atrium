@@ -57,7 +57,7 @@ impl NotifyTarget {
 }
 
 /// Remove systemd service notification / activation variables from spawned child commands
-/// so helper or user desktop children cannot hijack `reaulad`'s readiness or socket state.
+/// so helper or user desktop children cannot hijack `atriumd`'s readiness or socket state.
 pub(crate) fn scrub_child_env(cmd: &mut Command) {
     for var in SYSTEMD_CHILD_ENV_VARS {
         cmd.env_remove(var);
@@ -118,7 +118,7 @@ impl SystemdNotifier {
         }
     }
 
-    /// True if `reaulad` appears to have been launched under systemd management.
+    /// True if `atriumd` appears to have been launched under systemd management.
     pub(crate) fn is_systemd(&self) -> bool {
         self.socket.is_some() || self.invocation_id.is_some()
     }
@@ -302,7 +302,7 @@ mod tests {
             .unwrap_or_default()
             .as_nanos();
         std::env::temp_dir().join(format!(
-            "reaula-sd-test-{}-{nanos}.sock",
+            "atrium-sd-test-{}-{nanos}.sock",
             std::process::id()
         ))
     }

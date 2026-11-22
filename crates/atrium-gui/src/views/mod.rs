@@ -1,5 +1,6 @@
-//! Workspace views for `reaula-gui`.
+//! Workspace views for `atrium-gui`.
 
+mod about;
 mod calibration;
 mod diagnostics;
 mod keymaps;
@@ -19,11 +20,11 @@ use gpui_kit::component::progress::Progress;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::{AnyElement, Context, IntoElement as _, ParentElement as _, Styled as _, Window, div, px};
 
-use crate::ReaulaGui;
+use crate::AtriumGui;
 use crate::config::ConfiguredKeyboardKind;
 use crate::state::{AUDIO_DISCLAIMER_COOLDOWN_SECS, NavSection};
 
-impl ReaulaGui {
+impl AtriumGui {
     pub(crate) fn render_active_section(
         &self,
         window: &mut Window,
@@ -120,7 +121,7 @@ impl ReaulaGui {
                 div()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child("Start daemon: cargo run -p reaula-cli -- daemon start"),
+                    .child("Start daemon: cargo run -p atrium-cli -- daemon start"),
             )
             .child(
                 h_flex()

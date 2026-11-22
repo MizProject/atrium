@@ -1,5 +1,5 @@
 name: Support Request / Bug Report
-description: Report a bug, permissions/daemon problem, UI issue, or request general support for ReAULA.
+description: Report a bug, permissions/daemon problem, UI issue, or request general support for Atrium.
 title: "[Support]: "
 labels:
   - support
@@ -12,11 +12,11 @@ body:
   - type: dropdown
     id: component
     attributes:
-      label: ReAULA Component
+      label: Atrium Component
       options:
-        - GUI (reaula-gui)
-        - Daemon (reaulad / systemd)
-        - CLI (reaula)
+        - GUI (atrium-gui)
+        - Daemon (atriumd / systemd)
+        - CLI (atrium)
         - Calibration / Actuation / Rapid Trigger
         - Lighting / Audio Sync
         - TUI (Experimental)
@@ -43,6 +43,6 @@ body:
   - type: textarea
     id: diagnostics
     attributes:
-      label: Diagnostics Output (`reaula doctor` or GUI Diagnostics summary)
+      label: Diagnostics Output (`atrium doctor` or GUI Diagnostics summary)
       description: Paste diagnostic output if applicable (remove any personal info before pasting).
       render: text

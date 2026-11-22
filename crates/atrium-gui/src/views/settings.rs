@@ -12,18 +12,18 @@ use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::{Context, Div, ParentElement as _, Styled as _, div, px};
 
-use crate::ReaulaGui;
+use crate::AtriumGui;
 use crate::config;
 use crate::views::setup::{
     copy_command_row, render_hid_permission_card, status_indicator, theme_preview_card,
 };
 
 const GH_SUPPORT_ISSUE_URL: &str =
-    "https://github.com/MizProject/reaula/issues/new?template=support-request.yml";
+    "https://github.com/MizProject/atrium/issues/new?template=support-request.yml";
 const GH_UNSUPPORTED_ISSUE_URL: &str =
-    "https://github.com/MizProject/reaula/issues/new?template=unsupported-keyboard-support.yml";
+    "https://github.com/MizProject/atrium/issues/new?template=unsupported-keyboard-support.yml";
 
-impl ReaulaGui {
+impl AtriumGui {
     pub(crate) fn view_settings(&self, cx: &mut Context<Self>) -> Div {
         let t = self.text();
         let is_dark = cx.theme().is_dark();

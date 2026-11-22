@@ -7,7 +7,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Gauge, Paragraph, Wrap};
 
-use reaula_core::keymap::WIN60HE_KEYS;
+use atrium_core::keymap::WIN60HE_KEYS;
 
 use crate::state::{App, FocusPane, HitRegion, HitTarget};
 use crate::theme;

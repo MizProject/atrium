@@ -1,7 +1,7 @@
 //! 3D physical chassis, Type-C wiring, and keycap mesh builder for the Aula WIN 60 HE.
 
-use reaula_core::keyboards::win60he;
-use reaula_core::keymap::{KEYBOARD_CANVAS_HEIGHT, KEYBOARD_CANVAS_WIDTH, WIN60HE_KEYS};
+use atrium_core::keyboards::win60he;
+use atrium_core::keymap::{KEYBOARD_CANVAS_HEIGHT, KEYBOARD_CANVAS_WIDTH, WIN60HE_KEYS};
 
 use super::{
     CameraPreset, Kb3dCamera, KeyboardModel3d, Vertex, apply_board_tilt, cubic_bezier3,

@@ -7,8 +7,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
-use reaula_core::keymap::{KEYBOARD_CANVAS_WIDTH, WIN60HE_KEYS};
-use reaula_core::protocol;
+use atrium_core::keymap::{KEYBOARD_CANVAS_WIDTH, WIN60HE_KEYS};
+use atrium_core::protocol;
 
 use crate::state::{App, HitRegion, HitTarget, KeymapLayerView};
 use crate::theme::{self, contrast_ink, depth_matte_rgb};
@@ -223,7 +223,7 @@ pub fn draw_keyboard_matrix(
             MatrixMode::Keymaps => {
                 let show_fw = matches!(app.keymap_view, KeymapLayerView::Both | KeymapLayerView::FirmwareOnly);
                 let show_dm = matches!(app.keymap_view, KeymapLayerView::Both | KeymapLayerView::DaemonOnly);
-                let has_fw = show_fw && (key.index == reaula_core::keymap::idx::FN || app.keyboard_fn_map.contains_key(&key.index));
+                let has_fw = show_fw && (key.index == atrium_core::keymap::idx::FN || app.keyboard_fn_map.contains_key(&key.index));
                 let has_dm = show_dm && app.shortcut_rules.iter().any(|r| {
                     r.enabled && (r.trigger_key == key.index || r.modifier_key == Some(key.index))
                 });
@@ -250,7 +250,7 @@ pub fn draw_keyboard_matrix(
                 let tag = if has_fw && has_dm {
                     "F+D".into()
                 } else if has_fw {
-                    if key.index == reaula_core::keymap::idx::FN {
+                    if key.index == atrium_core::keymap::idx::FN {
                         "FN".into()
                     } else {
                         "FW".into()

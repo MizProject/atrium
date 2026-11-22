@@ -1,17 +1,18 @@
 [package]
-name = "reaula-tui"
+name = "atrium-tui"
 version = "0.1.0"
 edition = "2024"
 description = "Ratatui terminal dashboard for the Aula WIN 60 HE daemon"
-license = "MIT OR Apache-2.0"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/MizProject/atrium"
 
 [[bin]]
-name = "reaula-tui"
+name = "atrium-tui"
 path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 crossterm = "0.29"
 ratatui = "0.30.2"
-reaula-core = { path = "../reaula-core" }
+atrium-core = { path = "../atrium-core" }
 

@@ -1,4 +1,7 @@
-//! Reaula WIN 60 HE desktop workbench built with GPUI Kit and wgpu.
+// Copyright (C) 2026 MizProject Philippines
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+//! Atrium desktop workbench built with GPUI Kit and wgpu.
 
 mod config;
 mod guide_window;
@@ -31,16 +34,19 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     AnyWindowHandle, App, AppContext as _, AsyncApp, Bounds, Context, Entity, FocusHandle,
-    KeyDownEvent, ParentElement as _, Render, RenderImage, Styled as _, Subscription, WeakEntity,
-    Window, WindowBounds, WindowOptions, div, prelude::*, px, size,
+    KeyDownEvent, ObjectFit, ParentElement as _, Render, RenderImage, Styled as _, Subscription,
+    WeakEntity, Window, WindowBounds, WindowOptions, div, img, prelude::*, px, size,
 };
+use image::Frame;
+use smallvec::SmallVec;
 
-use reaula_core::audio_fx::{AudioEffectStyle, AudioPalette};
-use reaula_core::diagnostics::DiagnosticReport;
-use reaula_core::hid_probe::HidCandidateSummary;
-use reaula_core::ipc::VirtualKey;
-use reaula_core::keymap;
-use reaula_core::protocol::{
+use atrium_core::audio_fx::{AudioEffectStyle, AudioPalette};
+use atrium_core::diagnostics::DiagnosticReport;
+use atrium_core::hid_probe::HidCandidateSummary;
+use atrium_core::ipc::VirtualKey;
+use atrium_core::keymap;
+use atrium_core::legal;
+use atrium_core::protocol::{
     self, LIGHT_MAX_LEVEL, LightState, PollRate, TriggerConfig, TriggerMode, mm_to_raw,
 };
 
@@ -82,14 +88,28 @@ const HOTKEY_MODIFIER_OPTIONS: [(Option<u8>, &str); 6] = [
     (Some(keymap::idx::MENU), "Menu Key"),
 ];
 
+const ATRIUM_ICON_PNG: &[u8] = include_bytes!("../../../images/icon/atrium.png");
+
+fn load_atrium_app_icon() -> Option<Arc<RenderImage>> {
+    let mut rgba = image::load_from_memory(ATRIUM_ICON_PNG).ok()?.into_rgba8();
+    // GPUI RenderImage expects BGRA8 pixels for Blade/wgpu textures.
+    for px in rgba.pixels_mut() {
+        px.0.swap(0, 2);
+    }
+    let mut frames = SmallVec::<[Frame; 1]>::new();
+    frames.push(Frame::new(rgba));
+    Some(Arc::new(RenderImage::new(frames)))
+}
+
 #[derive(Parser)]
 #[command(
-    name = "reaula-gui",
+    name = "atrium-gui",
     version,
-    about = "GPUI Kit + wgpu driver for Aula WIN 60 HE"
+    about = "GPUI Kit + wgpu desktop suite for Atrium / Aula keyboards",
+    after_help = legal::CLI_LEGAL_AFTER_HELP
 )]
 struct Args {
-    /// Connect to a specific reaulad Unix domain socket
+    /// Connect to a specific atriumd Unix domain socket
     #[arg(long)]
     socket: Option<PathBuf>,
     /// Start on the Welcome & Hardware Setup wizard even after initial onboarding
@@ -97,13 +117,15 @@ struct Args {
     setup: bool,
 }
 
-pub(crate) struct ReaulaGui {
+pub(crate) struct AtriumGui {
     pub(crate) socket: Option<PathBuf>,
     pub(crate) config: AppConfig,
     pub(crate) setup: SetupDraftState,
     pub(crate) nav: NavSection,
     pub(crate) sidebar_collapsed: bool,
     pub(crate) guide_window: Option<AnyWindowHandle>,
+    pub(crate) app_icon_img: Option<Arc<RenderImage>>,
+    pub(crate) about_show_license: bool,
     pub(crate) conn: Result<ConnectedState, String>,
     pub(crate) offline_diag: Option<DiagnosticReport>,
     pub(crate) status_line: String,
@@ -171,7 +193,7 @@ pub(crate) struct ReaulaGui {
     pub(crate) _subscriptions: Vec<Subscription>,
 }
 
-impl ReaulaGui {
+impl AtriumGui {
     fn new(
         socket: Option<PathBuf>,
         config: AppConfig,
@@ -190,7 +212,7 @@ impl ReaulaGui {
         }
         let status_line = match &conn {
             Ok(s) => format!(
-                "Connected to reaulad (uid={}, pid={})",
+                "Connected to atriumd (uid={}, pid={})",
                 s.server_cred.uid, s.daemon_status.daemon_pid
             ),
             Err(e) => e.clone(),
@@ -1006,6 +1028,8 @@ impl ReaulaGui {
             nav: initial_nav,
             sidebar_collapsed: false,
             guide_window: None,
+            app_icon_img: load_atrium_app_icon(),
+            about_show_license: false,
             conn,
             offline_diag: None,
             status_line,
@@ -1682,7 +1706,7 @@ impl ReaulaGui {
             bg: [12, 18, 28],
             ..Default::default()
         };
-        let depths = [0.0f32; reaula_core::protocol::MATRIX_SLOTS];
+        let depths = [0.0f32; atrium_core::protocol::MATRIX_SLOTS];
         let sel = std::collections::BTreeSet::new();
         let empty = std::collections::BTreeSet::new();
         let now = Instant::now();
@@ -1738,7 +1762,7 @@ impl ReaulaGui {
         self.dirty_3d = true;
         self.status_line = match &self.conn {
             Ok(s) => format!(
-                "Reconnected to reaulad (uid={}, pid={})",
+                "Reconnected to atriumd (uid={}, pid={})",
                 s.server_cred.uid, s.daemon_status.daemon_pid
             ),
             Err(e) => e.clone(),
@@ -2125,7 +2149,16 @@ impl ReaulaGui {
             h_flex()
                 .w_full()
                 .justify_center()
-                .child(Icon::new(IconName::Keyboard))
+                .child(if let Some(icon_img) = &self.app_icon_img {
+                    img(icon_img.clone())
+                        .w(px(22.0))
+                        .h(px(22.0))
+                        .rounded(cx.theme().radius)
+                        .object_fit(ObjectFit::Contain)
+                        .into_any_element()
+                } else {
+                    Icon::new(IconName::Keyboard).into_any_element()
+                })
                 .into_any_element()
         } else {
             h_flex()
@@ -2142,6 +2175,15 @@ impl ReaulaGui {
                             h_flex()
                                 .items_center()
                                 .gap_1p5()
+                                .when_some(self.app_icon_img.clone(), |el, icon_img| {
+                                    el.child(
+                                        img(icon_img)
+                                            .w(px(18.0))
+                                            .h(px(18.0))
+                                            .rounded(cx.theme().radius)
+                                            .object_fit(ObjectFit::Contain),
+                                    )
+                                })
                                 .child(
                                     div()
                                         .w(px(6.0))
@@ -2153,7 +2195,7 @@ impl ReaulaGui {
                                             cx.theme().danger
                                         }),
                                 )
-                                .child(div().text_sm().child("REAULA")),
+                                .child(div().text_sm().child("ATRIUM")),
                         )
                         .child(
                             div()
@@ -2265,7 +2307,7 @@ impl ReaulaGui {
             )
         };
 
-        Sidebar::new("reaula-sidebar")
+        Sidebar::new("atrium-sidebar")
             .w(px(220.0))
             .collapsible(SidebarCollapsible::Icon)
             .collapsed(collapsed)
@@ -2275,7 +2317,7 @@ impl ReaulaGui {
     }
 }
 
-impl Render for ReaulaGui {
+impl Render for AtriumGui {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         for dead in self.pending_drop_images.drain(..) {
             let _ = window.drop_image(dead);
@@ -2332,7 +2374,7 @@ impl Render for ReaulaGui {
                     .child(Icon::new(self.nav.icon()))
                     .child(div().min_w_0().truncate().text_sm().child(
                         if is_setup_mode {
-                            gpui_kit::SharedString::from(format!("ReAULA · {}", t.nav_setup))
+                            gpui_kit::SharedString::from(format!("Atrium · {}", t.nav_setup))
                         } else {
                             gpui_kit::SharedString::from(t.nav_label(self.nav))
                         },
@@ -2394,6 +2436,17 @@ impl Render for ReaulaGui {
                             .accessibility_label("Toggle Light / Dark theme")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.toggle_theme(cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("top-about-btn")
+                            .xsmall()
+                            .outline()
+                            .icon(Icon::new(IconName::Info))
+                            .label("About…")
+                            .tooltip("About Atrium, Credits & GNU AGPL-3.0 License")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_about_dialog(window, cx);
                             })),
                     )
                     .child(
@@ -2556,10 +2609,41 @@ pub(crate) fn sanitize_command_paste(text: &str) -> String {
         .collect()
 }
 
+fn migrate_legacy_gui_config_if_needed() {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .filter(|v| !v.is_empty())
+                .map(|h| PathBuf::from(h).join(".config"))
+        });
+    let Some(cfg_root) = base else {
+        return;
+    };
+    let new_cfg = cfg_root.join("atrium").join("gui.json");
+    let legacy_cfg = cfg_root.join("reaula").join("gui.json");
+    if !new_cfg.exists()
+        && legacy_cfg.exists()
+        && let Some(parent) = new_cfg.parent()
+        && std::fs::create_dir_all(parent).is_ok()
+    {
+        let _ = std::fs::copy(&legacy_cfg, &new_cfg);
+    }
+}
+
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--about") {
+        println!(
+            "{}",
+            legal::format_about_banner("atrium-gui", env!("CARGO_PKG_VERSION"))
+        );
+        return;
+    }
     let args = Args::parse();
     let socket = args.socket;
     let force_setup = args.setup;
+    migrate_legacy_gui_config_if_needed();
     let config = config::load_app_config();
 
     gpui_kit::application()
@@ -2583,13 +2667,13 @@ fn main() {
                 },
                 cx,
                 move |window, cx| {
-                    cx.new(|cx| ReaulaGui::new(socket, cfg_clone, force_setup, window, cx))
+                    cx.new(|cx| AtriumGui::new(socket, cfg_clone, force_setup, window, cx))
                 },
             )
             .expect("failed to open window");
 
             let _ = _win.update(cx, |_, window, cx| {
-                window.set_window_title("Reaula - Keyboard Configuration & HID Probe Workbench");
+                window.set_window_title("Atrium - Keyboard Configuration & HID Probe Workbench");
                 let focus = entity.read(cx).root_focus.clone();
                 focus.focus(window, cx);
             });

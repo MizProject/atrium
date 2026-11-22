@@ -1,4 +1,4 @@
-//! Application state, daemon IPC wrappers, background streams, and diagnostic telemetry for `reaula-gui`.
+//! Application state, daemon IPC wrappers, background streams, and diagnostic telemetry for `atrium-gui`.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::OpenOptions;
@@ -10,26 +10,26 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::config::{ConfiguredKeyboardKind, KeyboardProfileEntry, now_unix_ms};
-use reaula_core::hid_probe::{
+use atrium_core::hid_probe::{
     self, HidCandidateSummary, UnknownKeyboardProbeReport, UnknownProbeOptions,
 };
-use reaula_core::hid_sysfs::enumerate_sysfs_hidraw;
-use reaula_core::keyboards;
+use atrium_core::hid_sysfs::enumerate_sysfs_hidraw;
+use atrium_core::keyboards;
 
 #[cfg(target_os = "linux")]
-use reaula_core::alsa;
-use reaula_core::audio_fx::{AudioEffectStyle, AudioFrameMetrics, AudioPalette};
-use reaula_core::diagnostics::{
+use atrium_core::alsa;
+use atrium_core::audio_fx::{AudioEffectStyle, AudioFrameMetrics, AudioPalette};
+use atrium_core::diagnostics::{
     self, CheckStatus, DiagnosticCheck, DiagnosticLayer, DiagnosticReport,
 };
-use reaula_core::driver::DeviceProbe;
-use reaula_core::ipc::{
+use atrium_core::driver::DeviceProbe;
+use atrium_core::ipc::{
     AudioSyncConfig, AudioSyncSource, AudioSyncStatus, DaemonClient, DaemonStatus, FnOverride,
     IpcError, PeerCredentials, ShortcutAction, ShortcutRule, ShortcutTriggerLog, ShortcutsSnapshot,
     VirtualKey,
 };
-use reaula_core::keymap;
-use reaula_core::protocol::{
+use atrium_core::keymap;
+use atrium_core::protocol::{
     self, CalibrationProgress, CalibrationStatus, LIGHT_MAX_LEVEL, LightState, LiveTravelSample,
     MATRIX_SLOTS, PrcsPair, TriggerConfig, TriggerMode,
 };
@@ -135,18 +135,18 @@ pub fn collect_setup_env_checks(
             }
         };
 
-    let sock_path = reaula_core::ipc::discover_client_socket_path(explicit_socket);
+    let sock_path = atrium_core::ipc::discover_client_socket_path(explicit_socket);
     let (daemon_connected, daemon_detail) = if let Some(pid) = daemon_pid {
         let hw = match device_connected {
             Some(true) => "hardware USB attached",
             Some(false) => "waiting for hardware USB",
             None => "IPC ready",
         };
-        (true, format!("Connected to reaulad (pid {pid}, {hw})"))
+        (true, format!("Connected to atriumd (pid {pid}, {hw})"))
     } else {
         (
             false,
-            format!("reaulad offline at {}", sock_path.display()),
+            format!("atriumd offline at {}", sock_path.display()),
         )
     };
 
@@ -484,7 +484,7 @@ pub struct TrackedImpulse {
 pub enum KeymapCategory {
     /// Stored inside WIN 60 HE onboard flash (`cmd 0x18`) as hardware `Fn + Key` -> USB HID code.
     FirmwareFnFlash,
-    /// Evaluated inside `reaulad` Linux memory with `/dev/uinput` + `EVIOCGRAB` key-leak guard.
+    /// Evaluated inside `atriumd` Linux memory with `/dev/uinput` + `EVIOCGRAB` key-leak guard.
     DaemonMemory,
 }
 
@@ -1105,7 +1105,7 @@ impl ConnectedState {
             draft_rule_depth_mm: 1.50,
             draft_rule_preset: ShortcutActionPreset::EmitVirtualKey,
             draft_virtual_key: VirtualKey::Up,
-            draft_rule_command: "notify-send 'Reaula WIN 60 HE' 'Hotkey triggered'".into(),
+            draft_rule_command: "notify-send 'Atrium WIN 60 HE' 'Hotkey triggered'".into(),
             shortcut_recording: false,
             record_first_key: None,
             captured_gesture_banner: None,
@@ -1141,7 +1141,7 @@ impl ConnectedState {
             },
             audio_active: false,
             last_audio_poll: Instant::now(),
-            audio_status_text: "Idle (ready to run equalizer in reaulad)".into(),
+            audio_status_text: "Idle (ready to run equalizer in atriumd)".into(),
             audio_source_label: "Not streaming".into(),
             audio_metrics: None,
             audio_preview_frame: None,
@@ -1160,7 +1160,7 @@ impl ConnectedState {
             state.apply_audio_status(st, active);
         }
         let _ = state.start_travel();
-        state.record_feedback("Connect & Probe", 0.0, true, "Connected to reaulad".into());
+        state.record_feedback("Connect & Probe", 0.0, true, "Connected to atriumd".into());
         Ok(state)
     }
 
@@ -1251,7 +1251,7 @@ impl ConnectedState {
         let stop_bg = Arc::clone(&stop);
 
         thread::Builder::new()
-            .name("reaula-gui-travel".into())
+            .name("atrium-gui-travel".into())
             .spawn(move || {
                 while !stop_bg.load(Ordering::Relaxed) {
                     match sub.next_sample() {
@@ -1627,7 +1627,7 @@ impl ConnectedState {
         let stop_bg = Arc::clone(&stop);
 
         thread::Builder::new()
-            .name("reaula-gui-calib".into())
+            .name("atrium-gui-calib".into())
             .spawn(move || {
                 while !stop_bg.load(Ordering::Relaxed) {
                     match sub.next_update() {
@@ -2037,7 +2037,7 @@ impl ConnectedState {
         ))
     }
 
-    /// Validate, update or add the Daemon rule, and sync to `reaulad` (rolling back on IPC error).
+    /// Validate, update or add the Daemon rule, and sync to `atriumd` (rolling back on IPC error).
     pub fn commit_draft_daemon_rule(
         &mut self,
         allow_replace_conflict: bool,
@@ -2432,7 +2432,7 @@ impl ConnectedState {
         }
     }
 
-    /// Sync live effect/palette/gain/fps/brightness/source edits to `reaulad`.
+    /// Sync live effect/palette/gain/fps/brightness/source edits to `atriumd`.
     pub fn push_audio_live_config(&mut self) {
         if !self.audio_active {
             return;
@@ -2448,7 +2448,7 @@ impl ConnectedState {
         }
     }
 
-    /// Start background ALSA/Demo equalizer in `reaulad` if hardware disclaimer is accepted.
+    /// Start background ALSA/Demo equalizer in `atriumd` if hardware disclaimer is accepted.
     pub fn start_audio_sync(&mut self) -> Result<(), String> {
         if !self.audio_disclaimer_accepted {
             self.open_audio_disclaimer(true);
@@ -2467,7 +2467,7 @@ impl ConnectedState {
             .map_err(|e| {
                 let msg = e.to_string();
                 if msg.contains("unknown variant") {
-                    "Running reaulad predates daemon-hosted Audio Sync; restart reaulad (`reaula daemon restart`).".into()
+                    "Running atriumd predates daemon-hosted Audio Sync; restart atriumd (`atrium daemon restart`).".into()
                 } else {
                     msg
                 }
@@ -2508,7 +2508,7 @@ impl ConnectedState {
         }
     }
 
-    /// Poll `reaulad` for the live audio FFT metrics & preview frame.
+    /// Poll `atriumd` for the live audio FFT metrics & preview frame.
     pub fn drain_audio(&mut self) -> (bool, Option<String>) {
         let interval = if self.audio_active {
             Duration::from_millis(33)
@@ -2584,7 +2584,7 @@ fn load_custom_slot(client: &mut DaemonClient, slot: u8) -> [[u8; 3]; MATRIX_SLO
     out
 }
 
-/// Local fallback diagnostics when `reaulad` is offline/unreachable.
+/// Local fallback diagnostics when `atriumd` is offline/unreachable.
 pub fn offline_diagnostic_report(reason: &str) -> DiagnosticReport {
     let mut checks = diagnostics::run_kernel_checks();
     checks.push(DiagnosticCheck {
@@ -2593,7 +2593,7 @@ pub fn offline_diagnostic_report(reason: &str) -> DiagnosticReport {
         status: CheckStatus::Fail,
         latency_ms: None,
         detail: reason.to_string(),
-        remedy: Some("Start the daemon first: `cargo run -p reaula-cli -- daemon start`.".into()),
+        remedy: Some("Start the daemon first: `cargo run -p atrium-cli -- daemon start`.".into()),
     });
     checks.push(DiagnosticCheck {
         layer: DiagnosticLayer::Keyboard,

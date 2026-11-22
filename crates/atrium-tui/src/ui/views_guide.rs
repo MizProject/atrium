@@ -39,7 +39,7 @@ pub fn draw(f: &mut Frame<'_>, area: Rect, app: &App, hits: &mut Vec<HitRegion>)
             "2. Firmware [FW] vs Daemon [DM] Keymap Architecture",
             &[
                 "• [FW] Firmware Flash (cmd 0x18, Amber #F59E0B): Stored inside keyboard MCU flash; persists with zero host software.",
-                "• [DM] Daemon Memory (reaulad, Aqua #00D7FF): Triggered at exact Hall-effect mm depth via EVIOCGRAB + /dev/uinput.",
+                "• [DM] Daemon Memory (atriumd, Aqua #00D7FF): Triggered at exact Hall-effect mm depth via EVIOCGRAB + /dev/uinput.",
                 "• Fn (#122) is strictly reserved for Firmware [FW] so Daemon chords never collide (hold Caps/Ctrl/Alt/Menu instead).",
                 "• Commands configured on [DM] RunCommand drop privileges cleanly to your non-root session via systemd-run --user.",
             ],
@@ -47,8 +47,8 @@ pub fn draw(f: &mut Frame<'_>, area: Rect, app: &App, hits: &mut Vec<HitRegion>)
         (
             "3. Daemon Audio Equalizer & Safety Notice",
             &[
-                "• reaulad hosts a privilege-dropped --capture-pcm child helper feeding 14-band FFT/beat metrics to cmd 0x09.",
-                "• Closing reaula-tui or reaula-gui keeps the Audio EQ active in the background until stopped.",
+                "• atriumd hosts a privilege-dropped --capture-pcm child helper feeding 14-band FFT/beat metrics to cmd 0x09.",
+                "• Closing atrium-tui or atrium-gui keeps the Audio EQ active in the background until stopped.",
                 "• Continuous per-key RGB streaming is experimental; confirm the 10-second liability modal before starting.",
             ],
         ),
@@ -58,15 +58,15 @@ pub fn draw(f: &mut Frame<'_>, area: Rect, app: &App, hits: &mut Vec<HitRegion>)
                 "• Fn + \\|        Cycle onboard RGB lighting modes",
                 "• Fn + Space     Hold ~3s to factory-reset hardware (use Diagnostics instead of raw resets)",
                 "• Fn + Win       Toggle Win-Key lock on hardware",
-                "• Ctrl+C / q     Cleanly restore terminal and exit reaula-tui (keyboard stays untouched)",
+                "• Ctrl+C / q     Cleanly restore terminal and exit atrium-tui (keyboard stays untouched)",
             ],
         ),
         (
             "5. Daemon & Systemd Management",
             &[
-                "• Standalone : `reaula daemon start` / `reaula daemon status` / `reaula daemon stop`",
-                "• Systemd    : `reaula daemon systemd install --enable --start` -> `reaulad@<user>.service` (Type=notify + WatchdogSec=30s)",
-                "• User Unit  : `reaula daemon systemd install --user --enable --start` (when udev rule grants hidraw)",
+                "• Standalone : `atrium daemon start` / `atrium daemon status` / `atrium daemon stop`",
+                "• Systemd    : `atrium daemon systemd install --enable --start` -> `atriumd@<user>.service` (Type=notify + WatchdogSec=30s)",
+                "• User Unit  : `atrium daemon systemd install --user --enable --start` (when udev rule grants hidraw)",
             ],
         ),
     ];

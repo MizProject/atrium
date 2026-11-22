@@ -207,7 +207,7 @@ pub fn run_kernel_checks_for(spec: &KeyboardSpec) -> Vec<DiagnosticCheck> {
         },
         remedy: (!v.readable_writable).then(|| {
             format!(
-                "This is normal when unprivileged clients connect via root `reaulad`, or install {}.",
+                "This is normal when unprivileged clients connect via root `atriumd`, or install {}.",
                 spec.udev_rule
             )
         }),
@@ -263,7 +263,7 @@ pub fn diagnose_uinput_open_error(err: &io::Error) -> (String, String) {
         }
         Some(libc::EACCES) | Some(libc::EPERM) => (
             format!("Permission denied opening /dev/uinput ({err})"),
-            "Run `reaulad` as root (`reaula daemon stop && reaula daemon start`) or grant /dev/uinput ACL access.".into(),
+            "Run `atriumd` as root (`atrium daemon stop && atrium daemon start`) or grant /dev/uinput ACL access.".into(),
         ),
         Some(libc::ENOENT) => (
             "/dev/uinput device node does not exist".into(),
@@ -343,7 +343,7 @@ pub fn run_software_checks() -> Vec<DiagnosticCheck> {
         detail: format!(
             "keymask_61={mask_ok}, trigger_frame={trig_ok}, safety_guard={guard_ok}"
         ),
-        remedy: (!all_ok).then(|| "Reinstall or rebuild reaula-core; internal protocol invariant failed.".into()),
+        remedy: (!all_ok).then(|| "Reinstall or rebuild atrium-core; internal protocol invariant failed.".into()),
     });
 
     checks

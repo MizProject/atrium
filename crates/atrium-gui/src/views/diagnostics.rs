@@ -13,10 +13,10 @@ use gpui_kit::{
     ScrollDelta, ScrollEvent, Styled as _, div, img, prelude::*, px,
 };
 
-use reaula_core::diagnostics::{CheckStatus, DiagnosticLayer, DiagnosticReport};
-use reaula_core::keymap;
+use atrium_core::diagnostics::{CheckStatus, DiagnosticLayer, DiagnosticReport};
+use atrium_core::keymap;
 
-use crate::ReaulaGui;
+use crate::AtriumGui;
 use crate::kb_3d::{SWITCH_3D_HEIGHT, SWITCH_3D_WIDTH, SwitchCameraPreset};
 use crate::state::{ConnectedState, SwitchViewMode, offline_diagnostic_report};
 use crate::theme::HardwareColors;
@@ -24,15 +24,19 @@ use crate::widgets::{
     KeyboardCanvasMode, MetricCell, render_metric_table, render_switch_2d_cross_section,
 };
 
-impl ReaulaGui {
+impl AtriumGui {
     pub(crate) fn view_diagnostics(&self, cx: &mut Context<Self>) -> Div {
         let report_opt: Option<DiagnosticReport> = match &self.conn {
             Ok(st) => st.diag_report.clone(),
             Err(_) => self.offline_diag.clone(),
         };
 
-        let alert = match (&report_opt, report_opt.as_ref().and_then(|r| r.attribution.primary_fault))
-        {
+        let alert = match (
+            &report_opt,
+            report_opt
+                .as_ref()
+                .and_then(|r| r.attribution.primary_fault),
+        ) {
             (Some(rep), None) => Alert::success("dx-summary", rep.attribution.summary.clone()),
             (Some(rep), Some(_)) => Alert::error("dx-summary", rep.attribution.summary.clone()),
             _ => Alert::info(
@@ -504,8 +508,21 @@ impl ReaulaGui {
             .flex_wrap()
             .items_stretch()
             .gap_3()
-            .child(div().flex_1().min_w(px(450.0)).overflow_hidden().child(depth_box))
-            .child(div().w(px(360.0)).max_w_full().flex_shrink_0().overflow_hidden().child(switch_box))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(450.0))
+                    .overflow_hidden()
+                    .child(depth_box),
+            )
+            .child(
+                div()
+                    .w(px(360.0))
+                    .max_w_full()
+                    .flex_shrink_0()
+                    .overflow_hidden()
+                    .child(switch_box),
+            )
     }
 
     fn render_diagnostics_bottom_row(&self, cx: &mut Context<Self>) -> Div {
@@ -518,7 +535,9 @@ impl ReaulaGui {
                     div()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child("Press keys with Live Travel ON to log travel peak and 0.00 return."),
+                        .child(
+                            "Press keys with Live Travel ON to log travel peak and 0.00 return.",
+                        ),
                 );
             } else {
                 let mut rows: Vec<_> = st.switch_tests.iter().collect();
@@ -561,17 +580,10 @@ impl ReaulaGui {
                                 }
                                 cx.notify();
                             }))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_xs()
-                                    .child(format!(
-                                        "{kname} (#{idx}): now {:.2} · peak {:.2} · x{}",
-                                        stat.current_mm, stat.peak_mm, stat.presses
-                                    )),
-                            )
+                            .child(div().flex_1().min_w_0().truncate().text_xs().child(format!(
+                                "{kname} (#{idx}): now {:.2} · peak {:.2} · x{}",
+                                stat.current_mm, stat.peak_mm, stat.presses
+                            )))
                             .child(
                                 div()
                                     .flex_shrink_0()
@@ -623,7 +635,7 @@ impl ReaulaGui {
                     .whitespace_normal()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child("Connect to reaulad to inspect live RPC RTT."),
+                    .child("Connect to atriumd to inspect live RPC RTT."),
             );
         }
 

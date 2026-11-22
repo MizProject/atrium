@@ -130,7 +130,7 @@ const TEXT_EN: UiText = UiText {
     step_hardware: "Hardware",
     step_finish: "Finish",
 
-    setup_title: "Welcome to ReAULA",
+    setup_title: "Welcome to Atrium",
     setup_subtitle: "Configure language, theme, system permissions, daemon IPC, and your keyboard before entering the workbench.",
     choose_language: "Interface Language",
     choose_theme: "Appearance Theme",
@@ -146,14 +146,14 @@ const TEXT_EN: UiText = UiText {
     disclaimer_must_accept: "Please acknowledge the disclaimer in Step 2 before finishing setup.",
 
     system_heading: "Permissions & Daemon Connection",
-    system_subtitle: "Verify HID device permissions (/dev/hidraw*), udev rules, /dev/uinput, and reaulad daemon connectivity.",
+    system_subtitle: "Verify HID device permissions (/dev/hidraw*), udev rules, /dev/uinput, and atriumd daemon connectivity.",
     refresh_checks: "Refresh Checks",
     reconnect_daemon: "Reconnect Daemon",
 
     hardware_heading: "Keyboard Selection & Unsupported HID Prober",
     supported_hw_tab: "Supported Keyboard",
     unsupported_hw_tab: "Unsupported Keyboard / Probe",
-    select_supported_desc: "Select a supported keyboard driver compiled into ReAULA, or switch to the Unsupported tab to inspect an unrecognized AULA model in 3D and collect capability JSON.",
+    select_supported_desc: "Select a supported keyboard driver compiled into Atrium, or switch to the Unsupported tab to inspect an unrecognized AULA model in 3D and collect capability JSON.",
     unsupported_desc: "Preview the generic 3D keyboard model, pick your HID interface below, and run capability checks. Review and save the sanitized JSON to submit an issue.",
     select_hid_label: "Target HID Interface (/dev/hidraw*)",
     model_hint_label: "Keyboard Model Name (e.g. AULA F75, Hero 68 HE)",
@@ -183,7 +183,7 @@ const TEXT_EN: UiText = UiText {
     settings_subtitle: "Configure application language, appearance, workbench defaults, and Linux HIDraw permissions.",
     settings_workbench_heading: "Workbench & Telemetry Preferences",
     settings_prefer_2d_label: "Prefer 2D keyboard blueprint stage by default",
-    settings_auto_travel_label: "Automatically stream live key travel when connected to reaulad",
+    settings_auto_travel_label: "Automatically stream live key travel when connected to atriumd",
     settings_hid_perms_heading: "HID Permissions (/dev/hidraw*) & Unsupported Keyboard Access",
     settings_hid_perms_desc: "Only WIN 60 HE (2E3C:C365) ships in 99-aula-win60he.rules. Other AULA keyboards need a VID:PID uaccess udev rule or temporary setfacl grant for active probing.",
     settings_open_setup_btn: "Run Onboarding Wizard\u{2026}",
@@ -212,7 +212,7 @@ const TEXT_ID: UiText = UiText {
     step_hardware: "Perangkat",
     step_finish: "Selesai",
 
-    setup_title: "Selamat Datang di ReAULA",
+    setup_title: "Selamat Datang di Atrium",
     setup_subtitle: "Atur bahasa, tema, izin sistem, koneksi daemon, dan keyboard Anda sebelum masuk ke layar utama.",
     choose_language: "Bahasa Antarmuka",
     choose_theme: "Tema Tampilan",
@@ -228,14 +228,14 @@ const TEXT_ID: UiText = UiText {
     disclaimer_must_accept: "Harap setujui penafian di langkah sebelumnya untuk menyelesaikan pengaturan.",
 
     system_heading: "Izin Sistem & Koneksi Daemon",
-    system_subtitle: "Periksa izin perangkat HID (/dev/hidraw*), aturan udev, /dev/uinput, dan status daemon reaulad.",
+    system_subtitle: "Periksa izin perangkat HID (/dev/hidraw*), aturan udev, /dev/uinput, dan status daemon atriumd.",
     refresh_checks: "Segarkan",
     reconnect_daemon: "Hubungkan Daemon",
 
     hardware_heading: "Pilihan Keyboard & Probe HID Belum Didukung",
     supported_hw_tab: "Keyboard Didukung",
     unsupported_hw_tab: "Belum Didukung / Probe",
-    select_supported_desc: "Pilih driver keyboard yang didukung ReAULA, atau buka tab Belum Didukung untuk melihat model 3D umum dan memindai HID sebagai JSON.",
+    select_supported_desc: "Pilih driver keyboard yang didukung Atrium, atau buka tab Belum Didukung untuk melihat model 3D umum dan memindai HID sebagai JSON.",
     unsupported_desc: "Lihat pratinjau keyboard 3D generik, pilih antarmuka HID Anda, jalankan pemeriksaan kapabilitas, dan simpan data JSON untuk dikirim ke GitHub Issues.",
     select_hid_label: "Target Antarmuka HID (/dev/hidraw*)",
     model_hint_label: "Nama Model Keyboard (mis. AULA F75)",
@@ -265,7 +265,7 @@ const TEXT_ID: UiText = UiText {
     settings_subtitle: "Atur bahasa aplikasi, tema, preferensi meja kerja, dan izin HIDraw Linux.",
     settings_workbench_heading: "Preferensi Meja Kerja & Telemetri",
     settings_prefer_2d_label: "Utamakan tampilan skema keyboard 2D secara default",
-    settings_auto_travel_label: "Aktifkan aliran travel tombol langsung saat terhubung ke reaulad",
+    settings_auto_travel_label: "Aktifkan aliran travel tombol langsung saat terhubung ke atriumd",
     settings_hid_perms_heading: "Izin HID (/dev/hidraw*) & Keyboard Belum Didukung",
     settings_hid_perms_desc: "Hanya WIN 60 HE (2E3C:C365) yang tercakup dalam 99-aula-win60he.rules. Keyboard AULA lain memerlukan aturan udev uaccess atau setfacl sementara.",
     settings_open_setup_btn: "Jalankan Panduan Awal\u{2026}",
@@ -294,7 +294,7 @@ const TEXT_ES: UiText = UiText {
     step_hardware: "Hardware",
     step_finish: "Finalizar",
 
-    setup_title: "Bienvenido a ReAULA",
+    setup_title: "Bienvenido a Atrium",
     setup_subtitle: "Configura el idioma, tema, permisos del sistema, demonio IPC y tu teclado antes de usar la aplicación.",
     choose_language: "Idioma de Interfaz",
     choose_theme: "Tema Visual",
@@ -310,7 +310,7 @@ const TEXT_ES: UiText = UiText {
     disclaimer_must_accept: "Acepta el aviso legal antes de finalizar la configuración.",
 
     system_heading: "Permisos y Conexión del Daemon",
-    system_subtitle: "Comprueba permisos de /dev/hidraw*, reglas udev, /dev/uinput y la conexión con reaulad.",
+    system_subtitle: "Comprueba permisos de /dev/hidraw*, reglas udev, /dev/uinput y la conexión con atriumd.",
     refresh_checks: "Actualizar",
     reconnect_daemon: "Reconectar Daemon",
 
@@ -347,7 +347,7 @@ const TEXT_ES: UiText = UiText {
     settings_subtitle: "Configura el idioma, tema, valores predeterminados y permisos HIDraw de Linux.",
     settings_workbench_heading: "Preferencias de Trabajo y Telemetría",
     settings_prefer_2d_label: "Usar vista 2D del teclado por defecto",
-    settings_auto_travel_label: "Iniciar telemetría de recorrido en vivo al conectar con reaulad",
+    settings_auto_travel_label: "Iniciar telemetría de recorrido en vivo al conectar con atriumd",
     settings_hid_perms_heading: "Permisos HID (/dev/hidraw*) y Teclados No Compatibles",
     settings_hid_perms_desc: "Solo WIN 60 HE (2E3C:C365) está en 99-aula-win60he.rules. Otros teclados requieren regla udev VID:PID o setfacl temporal para sondeo activo.",
     settings_open_setup_btn: "Abrir Asistente Inicial\u{2026}",
@@ -376,7 +376,7 @@ const TEXT_JA: UiText = UiText {
     step_hardware: "機器選択",
     step_finish: "完了",
 
-    setup_title: "ReAULA へようこそ",
+    setup_title: "Atrium へようこそ",
     setup_subtitle: "言語・テーマ・システム権限・デーモン接続・キーボード構成を順に設定します。",
     choose_language: "表示言語",
     choose_theme: "カラーテーマ",
@@ -392,7 +392,7 @@ const TEXT_JA: UiText = UiText {
     disclaimer_must_accept: "設定を完了するには免責事項への同意が必要です。",
 
     system_heading: "権限とデーモン接続状態",
-    system_subtitle: "/dev/hidraw*、udev ルール、/dev/uinput、および reaulad デーモン接続を確認します。",
+    system_subtitle: "/dev/hidraw*、udev ルール、/dev/uinput、および atriumd デーモン接続を確認します。",
     refresh_checks: "再確認",
     reconnect_daemon: "デーモン再接続",
 
@@ -429,7 +429,7 @@ const TEXT_JA: UiText = UiText {
     settings_subtitle: "言語・テーマ・初期表示・Linux HIDraw 権限を管理します。",
     settings_workbench_heading: "ワークベンチとテレメトリ設定",
     settings_prefer_2d_label: "既定で 2D キーボード図表示を優先する",
-    settings_auto_travel_label: "reaulad 接続時にリアルタイム変位ストリーミングを自動開始",
+    settings_auto_travel_label: "atriumd 接続時にリアルタイム変位ストリーミングを自動開始",
     settings_hid_perms_heading: "HID 権限 (/dev/hidraw*) と未対応キーボードアクセス",
     settings_hid_perms_desc: "99-aula-win60he.rules の対象は WIN 60 HE (2E3C:C365) のみです。未対応機種で詳細プローブを行うには VID:PID 用 udev ルールまたは一時 setfacl が必要です。",
     settings_open_setup_btn: "初期設定ウィザードを開く\u{2026}",
@@ -458,7 +458,7 @@ const TEXT_ZH_CN: UiText = UiText {
     step_hardware: "硬件探测",
     step_finish: "完成",
 
-    setup_title: "欢迎使用 ReAULA",
+    setup_title: "欢迎使用 Atrium",
     setup_subtitle: "在进入主工作区之前，按步骤完成语言、主题、系统权限、守护进程与键盘选择。",
     choose_language: "界面语言",
     choose_theme: "外观主题",
@@ -474,7 +474,7 @@ const TEXT_ZH_CN: UiText = UiText {
     disclaimer_must_accept: "请先确认第 2 步中的声明再完成设置。",
 
     system_heading: "权限与守护进程状态检查",
-    system_subtitle: "检测 /dev/hidraw* 权限、udev 规则、/dev/uinput 以及 reaulad 守护进程连接。",
+    system_subtitle: "检测 /dev/hidraw* 权限、udev 规则、/dev/uinput 以及 atriumd 守护进程连接。",
     refresh_checks: "重新检测",
     reconnect_daemon: "重连守护进程",
 
@@ -511,7 +511,7 @@ const TEXT_ZH_CN: UiText = UiText {
     settings_subtitle: "管理应用语言、外观主题、工作台默认项以及 Linux HIDraw 权限。",
     settings_workbench_heading: "工作台与实时行程首选项",
     settings_prefer_2d_label: "默认优先使用 2D 键盘平面视图",
-    settings_auto_travel_label: "连接 reaulad 时自动开启实时按键行程监控",
+    settings_auto_travel_label: "连接 atriumd 时自动开启实时按键行程监控",
     settings_hid_perms_heading: "HID 权限 (/dev/hidraw*) 与未适配键盘访问授权",
     settings_hid_perms_desc: "默认 99-aula-win60he.rules 仅匹配 WIN 60 HE (2E3C:C365)。其他型号需安装对应 VID:PID 的 udev 规则或使用临时 setfacl 授权。",
     settings_open_setup_btn: "重新打开初始向导\u{2026}",

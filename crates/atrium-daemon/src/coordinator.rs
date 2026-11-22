@@ -7,15 +7,15 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
-use reaula_core::diagnostics::{
+use atrium_core::diagnostics::{
     self, CheckStatus, DiagnosticCheck, DiagnosticLayer, DiagnosticReport,
 };
-use reaula_core::ipc::{
+use atrium_core::ipc::{
     self, DaemonRequest, DaemonResponse, DaemonStatus, FnOverride, KeyActuationEntry,
     KeyDeadbandEntry, KeySwitchEntry, ShortcutAction, ShortcutRule, ShortcutTriggerLog,
 };
-use reaula_core::keyboards::{DriverError, KeyboardSpec};
-use reaula_core::protocol::{
+use atrium_core::keyboards::{DriverError, KeyboardSpec};
+use atrium_core::protocol::{
     BODY_LEN, CalibrationProgress, CalibrationStatus, LightState, LiveTravelSample, MATRIX_SLOTS,
     PollRate,
 };
@@ -223,7 +223,7 @@ impl HardwareState {
     fn unit_mm(&self) -> f64 {
         self.driver
             .as_ref()
-            .map_or(reaula_core::protocol::TRIGGER_UNIT_MM_DEFAULT, |d| d.unit_mm())
+            .map_or(atrium_core::protocol::TRIGGER_UNIT_MM_DEFAULT, |d| d.unit_mm())
     }
 
     fn ensure_connected(&mut self, force: bool) -> Result<&mut dyn AulaDriver, String> {
@@ -939,7 +939,7 @@ fn run_daemon_diagnostics(
         status: CheckStatus::Pass,
         latency_ms: Some(0.0),
         detail: format!(
-            "reaulad pid={} uid={} socket={} model={} allowlist={:?} subs={} shortcuts={}",
+            "atriumd pid={} uid={} socket={} model={} allowlist={:?} subs={} shortcuts={}",
             std::process::id(),
             ipc::current_uid(),
             socket_path,

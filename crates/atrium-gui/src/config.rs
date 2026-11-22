@@ -174,29 +174,29 @@ pub fn now_unix_ms() -> u64 {
 
 pub fn config_file_path() -> PathBuf {
     if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()) {
-        return PathBuf::from(dir).join("reaula").join("gui.json");
+        return PathBuf::from(dir).join("atrium").join("gui.json");
     }
     if let Some(home) = std::env::var_os("HOME").filter(|v| !v.is_empty()) {
         return PathBuf::from(home)
             .join(".config")
-            .join("reaula")
+            .join("atrium")
             .join("gui.json");
     }
-    PathBuf::from("/tmp/reaula-gui.json")
+    PathBuf::from("/tmp/atrium-gui.json")
 }
 
 pub fn probe_export_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()) {
-        return PathBuf::from(dir).join("reaula").join("probes");
+        return PathBuf::from(dir).join("atrium").join("probes");
     }
     if let Some(home) = std::env::var_os("HOME").filter(|v| !v.is_empty()) {
         return PathBuf::from(home)
             .join(".local")
             .join("share")
-            .join("reaula")
+            .join("atrium")
             .join("probes");
     }
-    PathBuf::from("/tmp/reaula-probes")
+    PathBuf::from("/tmp/atrium-probes")
 }
 
 pub fn load_app_config() -> AppConfig {
@@ -252,7 +252,7 @@ pub fn save_probe_json_file_in(dir: &Path, model_hint: &str, json: &str) -> Resu
     } else {
         slug
     };
-    let path = dir.join(format!("reaula-probe-{stem}-{}.json", now_unix_ms()));
+    let path = dir.join(format!("atrium-probe-{stem}-{}.json", now_unix_ms()));
     fs::write(&path, json).map_err(|e| format!("write {}: {e}", path.display()))?;
     set_private_file_mode(&path);
     Ok(path)
@@ -274,7 +274,7 @@ mod tests {
     #[test]
     fn config_roundtrip_and_multi_keyboard_crud() {
         let dir =
-            std::env::temp_dir().join(format!("reaula-gui-cfg-{}", std::process::id()));
+            std::env::temp_dir().join(format!("atrium-gui-cfg-{}", std::process::id()));
         let path = dir.join("gui.json");
 
         let mut cfg = AppConfig {
