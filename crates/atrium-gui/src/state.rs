@@ -258,7 +258,11 @@ impl SetupDraftState {
             return Err(msg);
         };
         let hint = if model_hint.trim().is_empty() {
-            cand.product.clone()
+            if cand.known_supported_id.is_none() && !cand.product.trim().is_empty() {
+                cand.product.clone()
+            } else {
+                "Generic Keyboard".to_string()
+            }
         } else {
             model_hint.trim().to_string()
         };
@@ -315,12 +319,12 @@ impl SetupDraftState {
                 let hint = model_hint_override.trim();
                 let label = if !hint.is_empty() {
                     hint.to_string()
-                } else if let Some(c) = cand.filter(|c| !c.product.is_empty()) {
+                } else if let Some(c) = cand.filter(|c| !c.product.is_empty() && c.known_supported_id.is_none()) {
                     c.product.clone()
                 } else if let Some(c) = cand {
-                    format!("Unsupported Keyboard ({}:{})", c.vid_hex, c.pid_hex)
+                    format!("Generic Keyboard ({}:{})", c.vid_hex, c.pid_hex)
                 } else {
-                    "Unsupported AULA Keyboard".to_string()
+                    "Generic Keyboard".to_string()
                 };
                 let slug: String = label
                     .chars()

@@ -254,11 +254,11 @@ impl AtriumGui {
         cx: &mut Context<Self>,
     ) -> Div {
         let t = self.text();
-        let stage = self.render_unsupported_stage_box("hub-unsup", &kb.label, cx);
+        let stage = self.render_unsupported_stage_box("hub-unsup", cx);
 
         let info_panel = GroupBox::new()
             .outline()
-            .title(format!("Unsupported Keyboard · {}", kb.label))
+            .title(format!("Generic Keyboard · {}", kb.label))
             .child(
                 v_flex()
                     .w_full()
@@ -274,7 +274,7 @@ impl AtriumGui {
                             .child(
                                 kb.hid_summary
                                     .as_deref()
-                                    .unwrap_or("Generic 75% 3D representation active for unsupported HID hardware.")
+                                    .unwrap_or("Generic keyboard layout preview active for unsupported HID hardware.")
                                     .to_string(),
                             ),
                     )

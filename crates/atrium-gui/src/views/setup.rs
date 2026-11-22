@@ -688,14 +688,9 @@ impl AtriumGui {
     }
 
     fn view_setup_unsupported_studio(&self, t: &'static UiText, cx: &mut Context<Self>) -> Div {
-        let model_label = if self.setup.model_name_hint.trim().is_empty() {
-            crate::kb_3d::generic::MODEL.label
-        } else {
-            self.setup.model_name_hint.trim()
-        };
         let has_hid = !self.setup.hid_candidates.is_empty();
 
-        let left_3d_panel = self.render_unsupported_stage_box("setup-stage", model_label, cx);
+        let left_3d_panel = self.render_unsupported_stage_box("setup-stage", cx);
 
         let mut right_probe_panel = v_flex()
             .flex_1()
@@ -931,7 +926,6 @@ impl AtriumGui {
     pub(crate) fn render_unsupported_stage_box(
         &self,
         id_prefix: &'static str,
-        model_label: &str,
         cx: &mut Context<Self>,
     ) -> Div {
         let gpu_ready = self.renderer_3d.is_ok();
@@ -1069,15 +1063,15 @@ impl AtriumGui {
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .child(format!(
-                                "Drag orbit · Wheel zoom · Generic 75% 3D model ({})",
-                                model_label
+                                "Drag orbit · Wheel zoom · {}",
+                                crate::kb_3d::generic::MODEL.label
                             )),
                     ),
                 _ => v_flex().w_full().min_w_0().items_center().py_6().child(
                     div()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child("Rendering generic 3D prototype..."),
+                        .child("Rendering generic keyboard 3D view..."),
                 ),
             }
         } else {
@@ -1085,7 +1079,7 @@ impl AtriumGui {
             v_flex()
                 .w_full()
                 .min_w_0()
-                .child(render_unsupported_2d_canvas(model_label, &hc, 0.85))
+                .child(render_unsupported_2d_canvas(&hc, 0.85))
         };
 
         v_flex()

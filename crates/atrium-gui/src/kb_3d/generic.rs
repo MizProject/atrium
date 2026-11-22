@@ -1,4 +1,4 @@
-//! Generic 75% (83-key) 3D procedural keyboard rendition for unsupported or probing boards.
+//! Generic 3D procedural keyboard rendition for unsupported or probing boards.
 
 use atrium_core::keyboards::KeyDef;
 
@@ -13,7 +13,7 @@ const GENERIC_SCALE: f32 = 0.0098;
 
 pub const MODEL: KeyboardModel3d = KeyboardModel3d {
     id: "generic-unsupported",
-    label: "Generic 75% Prototype (Unsupported)",
+    label: "Generic Keyboard",
     spec: None,
     keys: &GENERIC_KEYS,
     default_camera: Kb3dCamera {
@@ -197,14 +197,14 @@ fn build_generic_parts(verts: &mut Vec<Vertex>, indices: &mut Vec<u32>) {
         [0.0, -1.0, 0.0, 0.0],
     );
 
-    // Subtle brushed side badge groove (distinct visual signature for unmapped prototype deck).
+    // Subtle brushed top bezel accent strip (metallic kind 1.0, slot -1 so it stays static).
     push_box(
         verts,
         indices,
         [2.25, 0.092, -1.275],
         [2.92, 0.104, -1.245],
-        [0.16, 0.62, 0.85],
-        [4.0, 0.0, 0.65, 0.0],
+        [0.18, 0.21, 0.25],
+        [1.0, -1.0, 0.0, 0.0],
     );
 
     push_generic_cable(verts, indices);
@@ -298,38 +298,100 @@ fn build_generic_parts(verts: &mut Vec<Vertex>, indices: &mut Vec<u32>) {
 }
 
 fn push_generic_cable(verts: &mut Vec<Vertex>, indices: &mut Vec<u32>) {
-    let port_x = -2.18;
+    // Port, plug housing, and strain-relief boot use board-local kinds (< 4.5) so
+    // `vs_main` tilts them locked to the rear chassis wall (`z = -1.32`).
+    let port_x = -2.18_f32;
+    let port_y = -0.095_f32;
+
+    let shield_col = [0.16, 0.19, 0.24];
+    let cavity_col = [0.014, 0.016, 0.022];
+    let chrome_col = [0.28, 0.32, 0.38];
+    let plug_col = [0.095, 0.108, 0.135];
+    let plug_bevel_col = [0.125, 0.142, 0.175];
+    let boot_col = [0.042, 0.046, 0.056];
+
+    // Recessed Type-C receptacle bezel seated flush in rear chassis face (`z = -1.32`).
     push_box(
         verts,
         indices,
-        [port_x - 0.11, -0.15, -1.36],
-        [port_x + 0.11, -0.04, -1.32],
-        [0.09, 0.11, 0.14],
-        [5.0, -1.0, 0.0, 0.0],
+        [port_x - 0.165, port_y - 0.064, -1.342],
+        [port_x + 0.165, port_y + 0.064, -1.314],
+        shield_col,
+        [1.0, -1.0, 0.0, 0.0],
     );
+    // Recessed dark receptacle cavity.
     push_box(
         verts,
         indices,
-        [port_x - 0.085, -0.14, -1.52],
-        [port_x + 0.085, -0.05, -1.36],
-        [0.12, 0.14, 0.18],
-        [5.0, -1.0, 0.0, 0.0],
+        [port_x - 0.130, port_y - 0.042, -1.346],
+        [port_x + 0.130, port_y + 0.042, -1.312],
+        cavity_col,
+        [0.0, -1.0, 0.0, 0.0],
+    );
+    // Metallic Type-C connector tongue bridging cavity and plug body.
+    push_box(
+        verts,
+        indices,
+        [port_x - 0.105, port_y - 0.032, -1.375],
+        [port_x + 0.105, port_y + 0.032, -1.325],
+        chrome_col,
+        [1.0, -1.0, 0.0, 0.0],
+    );
+    // Molded USB-C plug housing connected directly to metallic collar.
+    push_box(
+        verts,
+        indices,
+        [port_x - 0.122, port_y - 0.050, -1.615],
+        [port_x + 0.122, port_y + 0.050, -1.370],
+        plug_col,
+        [1.0, -1.0, 0.0, 0.0],
+    );
+    // Top/bottom bevel rib on plug housing.
+    push_box(
+        verts,
+        indices,
+        [port_x - 0.102, port_y - 0.058, -1.610],
+        [port_x + 0.102, port_y + 0.058, -1.375],
+        plug_bevel_col,
+        [1.0, -1.0, 0.0, 0.0],
     );
 
-    let p0 = apply_board_tilt([port_x, -0.095, -1.52]);
-    let p1 = apply_board_tilt([port_x, -0.125, -1.78]);
-    let p2 = [port_x + 0.25, -0.175, -2.18];
-    let p3 = [port_x + 0.75, -0.200, -2.95];
+    // Tapered strain-relief boot extending seamlessly from plug rear face (`z = -1.610..-1.775`).
+    let boot_spine = [
+        [port_x, port_y, -1.608],
+        [port_x, port_y, -1.655],
+        [port_x, port_y, -1.705],
+        [port_x, port_y, -1.745],
+        [port_x, port_y, -1.775],
+    ];
+    let boot_radii = [0.054, 0.048, 0.044, 0.038, 0.033];
+    push_tube(verts, indices, &boot_spine, &boot_radii, 12, boot_col, 0.0);
 
-    let steps = 20usize;
-    let mut spine = Vec::with_capacity(steps + 1);
-    let mut radii = Vec::with_capacity(steps + 1);
-    for i in 0..=steps {
-        let t = (i as f32) / (steps as f32);
-        let mut p = cubic_bezier3(p0, p1, p2, p3, t);
-        p[1] = p[1].max(-0.245);
+    // Flexible desk cable starts in tilted world space (`kind = 6.0 >= 4.5`) at the exact boot exit
+    // and drapes gently down onto the studio desk pad (`y = -0.30 + radius`).
+    let exit_world = apply_board_tilt([port_x, port_y, -1.770]);
+    let cable_r = 0.032_f32;
+    let desk_y = -0.30 + cable_r;
+
+    let c1 = [exit_world[0], exit_world[1] + 0.015, exit_world[2] - 0.28];
+    let c2 = [port_x - 0.02, desk_y, -2.30];
+    let join = [port_x - 0.06, desk_y, -2.68];
+
+    let d1 = [port_x - 0.12, desk_y, -3.15];
+    let d2 = [port_x - 0.28, desk_y, -3.65];
+    let end = [port_x - 0.42, desk_y, -4.12];
+
+    let mut spine = Vec::with_capacity(34);
+    for i in 0..=16 {
+        let t = i as f32 / 16.0;
+        let mut p = cubic_bezier3(exit_world, c1, c2, join, t);
+        p[1] = p[1].max(desk_y);
         spine.push(p);
-        radii.push(0.030);
     }
-    push_tube(verts, indices, &spine, &radii, 10, [0.18, 0.22, 0.26], 6.0);
+    for i in 1..=16 {
+        let t = i as f32 / 16.0;
+        spine.push(cubic_bezier3(join, d1, d2, end, t));
+    }
+    let radii = vec![cable_r; spine.len()];
+    push_tube(verts, indices, &spine, &radii, 12, [0.10, 0.12, 0.16], 6.0);
 }

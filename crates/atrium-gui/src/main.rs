@@ -928,6 +928,7 @@ impl AtriumGui {
                     this.setup.selected_hid_idx = Some(*ix);
                     if let Some(cand) = this.setup.hid_candidates.get(*ix).cloned()
                         && this.setup.model_name_hint.trim().is_empty()
+                        && cand.known_supported_id.is_none()
                         && !cand.product.trim().is_empty()
                     {
                         this.setup.model_name_hint = cand.product.clone();
@@ -2122,26 +2123,36 @@ impl AtriumGui {
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.text();
-        let active_kb_label = self
-            .config
-            .active_keyboard()
-            .map(|k| k.label.clone());
-        let (conn_ok, daemon_info, travel_on, model_name) = match &self.conn {
-            Ok(st) => (
+        let active_kb = self.config.active_keyboard();
+        let active_kb_is_unsup = active_kb
+            .as_ref()
+            .is_some_and(|k| k.kind == ConfiguredKeyboardKind::Unsupported);
+        let active_kb_label = active_kb.map(|k| k.label.clone());
+        let (conn_ok, daemon_info, travel_on, model_name) = if active_kb_is_unsup {
+            (
                 true,
-                format!(
-                    "{} kHz · pid {}",
-                    st.poll_rate_khz, st.daemon_status.daemon_pid
+                "Generic Keyboard".to_string(),
+                false,
+                active_kb_label.unwrap_or_else(|| "Generic Keyboard".to_string()),
+            )
+        } else {
+            match &self.conn {
+                Ok(st) => (
+                    true,
+                    format!(
+                        "{} kHz · pid {}",
+                        st.poll_rate_khz, st.daemon_status.daemon_pid
+                    ),
+                    st.travel_enabled,
+                    active_kb_label.unwrap_or_else(|| st.model_label().to_string()),
                 ),
-                st.travel_enabled,
-                active_kb_label.unwrap_or_else(|| st.model_label().to_string()),
-            ),
-            Err(_) => (
-                false,
-                t.daemon_offline.into(),
-                false,
-                active_kb_label.unwrap_or_else(|| "AULA WIN 60 HE".to_string()),
-            ),
+                Err(_) => (
+                    false,
+                    t.daemon_offline.into(),
+                    false,
+                    active_kb_label.unwrap_or_else(|| "Generic Keyboard".to_string()),
+                ),
+            }
         };
         let collapsed = self.sidebar_collapsed;
 
@@ -2330,8 +2341,8 @@ impl Render for AtriumGui {
             .config
             .active_keyboard()
             .filter(|k| k.kind == ConfiguredKeyboardKind::Unsupported);
-        let (conn_ok, hw_badge) = if let Some(kb) = active_unsup {
-            (true, format!("{} · Generic 3D Probe", kb.label))
+        let (conn_ok, hw_badge) = if active_unsup.is_some() {
+            (true, "Generic Keyboard · HID Probe".to_string())
         } else {
             match &self.conn {
                 Ok(s) => (
@@ -2464,6 +2475,8 @@ impl Render for AtriumGui {
 
         let footer_right = if is_setup_mode {
             format!("Step {} / 5", self.setup.step.min(4) + 1)
+        } else if active_unsup.is_some() {
+            "Generic Keyboard".to_string()
         } else {
             match &self.conn {
                 Ok(s) => {

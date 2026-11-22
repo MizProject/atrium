@@ -1875,6 +1875,7 @@ mod tests {
     fn generic_unsupported_model_builds_and_renders_offscreen() {
         let gen_explicit = find_model(Some("generic-unsupported"));
         assert_eq!(gen_explicit.id, "generic-unsupported");
+        assert_eq!(gen_explicit.label, "Generic Keyboard");
         assert!(gen_explicit.spec.is_none());
 
         let gen_unknown = find_model(Some("aula-f75-unknown"));
@@ -1883,6 +1884,24 @@ mod tests {
         let (verts, idx) = build_scene_mesh(gen_unknown);
         assert!(verts.len() > 2000);
         assert_eq!(idx.len() % 3, 0);
+
+        // Verify the generic model keeps all chassis/plug geometry cleanly connected:
+        // cable (`kind >= 5.9`) starts right at the tilted rear-port strain relief exit (`apply_board_tilt([-2.18, -0.095, -1.770])`).
+        let expected_exit = apply_board_tilt([-2.18, -0.095, -1.770]);
+        let min_cable_join_dist = verts
+            .iter()
+            .filter(|v| v.meta[0] >= 5.9 && v.meta[0] < 6.4)
+            .map(|v| {
+                let dx = v.pos[0] - expected_exit[0];
+                let dy = v.pos[1] - expected_exit[1];
+                let dz = v.pos[2] - expected_exit[2];
+                (dx * dx + dy * dy + dz * dz).sqrt()
+            })
+            .fold(f32::INFINITY, f32::min);
+        assert!(
+            min_cable_join_dist < 0.05,
+            "generic cable must start flush at strain-relief exit (min_dist={min_cable_join_dist:.4})"
+        );
 
         let renderer = match KeyboardRenderer3D::new_for_keyboard(Some("generic-unsupported")) {
             Ok(r) => r,
@@ -1925,5 +1944,29 @@ mod tests {
         let bytes = frame.as_bytes(0).unwrap();
         assert_eq!(bytes.len(), (KB3D_WIDTH * KB3D_HEIGHT * 4) as usize);
         assert!(bytes.iter().any(|&b| b != 0));
+
+        if let Ok(out_dir) = std::env::var("ATRIUM_DUMP_GENERIC_PREVIEW_DIR") {
+            let dir = std::path::Path::new(&out_dir);
+            let _ = std::fs::create_dir_all(dir);
+            for (name, preset) in [
+                ("iso", CameraPreset::Perspective),
+                ("top", CameraPreset::Top),
+                ("side", CameraPreset::Side),
+            ] {
+                let p_cam = Kb3dCamera::from_preset_for(gen_unknown, preset);
+                let p_frame = renderer.render_frame(&p_cam, &scene).unwrap();
+                let mut rgba = p_frame.as_bytes(0).unwrap().to_vec();
+                for px in rgba.chunks_exact_mut(4) {
+                    px.swap(0, 2);
+                }
+                let _ = image::save_buffer(
+                    dir.join(format!("generic_{name}.png")),
+                    &rgba,
+                    KB3D_WIDTH,
+                    KB3D_HEIGHT,
+                    image::ColorType::Rgba8,
+                );
+            }
+        }
     }
 }

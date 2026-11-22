@@ -58,7 +58,7 @@ impl AtriumGui {
                             Alert::info(
                                 "unsupported-section-note",
                                 format!(
-                                    "{} is configured as an Unsupported / Probe keyboard. Per-key magnetic calibration and firmware flash keymaps apply to natively supported drivers (such as AULA WIN 60 HE).",
+                                    "{} is configured as an Unsupported / Probe keyboard. Per-key magnetic calibration and firmware flash keymaps apply only to keyboards with a native compiled driver.",
                                     kb.label
                                 ),
                             )

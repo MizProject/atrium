@@ -1244,12 +1244,8 @@ fn linear_to_srgb_u8(c: f32) -> u8 {
     (srgb * 255.0).round().clamp(0.0, 255.0) as u8
 }
 
-/// 2D anatomical schematic fallback for the generic 75% unsupported keyboard rendition.
-pub fn render_unsupported_2d_canvas(
-    model_label: &str,
-    hc: &HardwareColors,
-    scale: f32,
-) -> AnyElement {
+/// 2D schematic fallback for the generic keyboard rendition.
+pub fn render_unsupported_2d_canvas(hc: &HardwareColors, scale: f32) -> AnyElement {
     const GENERIC_2D_W: f32 = 625.0;
     const GENERIC_2D_H: f32 = 255.0;
     let board_w = GENERIC_2D_W * scale + 28.0;
@@ -1284,7 +1280,7 @@ pub fn render_unsupported_2d_canvas(
                 .top(px(4.0))
                 .text_xs()
                 .text_color(rgb(hc.key_sub_ink))
-                .child(format!("2D PROTOTYPE · {model_label}")),
+                .child("GENERIC KEYBOARD"),
         );
 
     for k in kb_3d::generic::GENERIC_KEYS {

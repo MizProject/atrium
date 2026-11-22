@@ -23,7 +23,7 @@
 | Model | USB VID:PID | Status | Preview |
 | :--- | :--- | :--- | :---: |
 | **AULA WIN 60 HE** | `2E3C:C365` | Full driver support (Calibration, Actuation/RT, 4-Slot Switch Profiles, Deadbands, SOCD, 1-8 kHz Poll, Firmware RGB, Custom Slots, Audio EQ, `[FW]` + `[DM]` Keymaps) | <img src="images/products/win60he.png" width="140" alt="AULA WIN 60 HE" /> |
-| **Unsupported AULA / HID Boards** | User-selected `/dev/hidraw*` | Generic 3D probe stage + sanitized capability JSON exporter + GitHub Issue submission workflow (includes per-device `udev`/`setfacl` permission helper) | Generic 75% 3D Stage |
+| **Unsupported AULA / HID Boards** | User-selected `/dev/hidraw*` | Generic 3D probe stage + sanitized capability JSON exporter + GitHub Issue submission workflow (includes per-device `udev`/`setfacl` permission helper) | Generic Keyboard 3D Stage |
 
 ## Desktop GUI (`atrium-gui`) Screenshots
 
